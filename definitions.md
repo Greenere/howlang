@@ -26,17 +26,23 @@ Or a derivative type:
 - Map
 - List
 
-List is a indexed map, i.e.
+List is a special Map, i.e.
 
 ```howlang
 var c = {1,2,3,4}
 var c = {
-    0: 1
-    1: 2
-    2: 3
+    0: 1,
+    1: 2,
+    2: 3,
     4: 4
 }
-c[0]
+var c = (n){
+    n == 0: 1,
+    n == 1: 2,
+    n == 2: 3,
+    n == 4: 4
+}
+c(0)
 ```
 
 ## Declare a function
@@ -48,6 +54,21 @@ var sum = (a,b){
 ```
 
 A function is a special type of Map that accepts arguments with a default mapping option "::" that denotes the return. The function is by default a branching map, which means that when it is called, only the one with key that evaluates true will be set off.
+
+Local variables:
+
+```howlang
+var max_two = (a, b){
+    a > b: a,
+    :: b
+}
+
+var max = (nums){
+    n: len(nums), # this is a local variable
+    n == 1: nums(0),
+    :: max_two(nums(0), max(nums(0:)))
+}
+```
 
 ## Declare a class
 

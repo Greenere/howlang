@@ -1,0 +1,19 @@
+var merge = (nums1, nums2){
+    len(nums1) == 0: nums2,
+    len(nums2) == 0: nums1,
+    nums1(0) <= nums2(0): {nums1(0)} + merge(nums1(1:),nums2),
+    :: {nums2(0)} + merge(nums2(1:),nums1)
+}
+
+var sort = (nums){
+    len(nums) == 1: {nums(0)},
+    len(nums) == 2: (ns){
+        ns(0) <= ns(1): ns,
+        :: {ns(1), ns(0)}
+    }(nums)
+    :: merge(sort(nums(:len(nums)/2)), sort(nums(len(nums)/2:)))
+}
+
+var nums = {1,2,3,4,5}
+
+print(sort(nums))
