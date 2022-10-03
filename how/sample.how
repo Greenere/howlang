@@ -1,0 +1,26 @@
+var fibo = (n){
+    n < 2: 1,
+    :: fibo(n-1) + fibo(n-2)
+}
+
+var person = [name, age]{
+    name: name,
+    age: age,
+    fibo: (n){
+        n < 2: 1
+        :: fibo(n-1) + fibo(n-2)
+    }
+}
+
+var a = 2
+var b = {
+    name: "Kelly",
+    age: 21
+}
+var c = {1,2,3}
+var p = person["Green", 23]
+
+fibo(a)
+
+print(fibo(3))
+print(p.name, p.fibo(3))
