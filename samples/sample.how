@@ -6,9 +6,8 @@ var fibo = (n){
 var person = [name, age]{
     name: name,
     age: age,
-    fibo: (n){
-        n < 2: 1
-        :: fibo(n-1) + fibo(n-2)
+    greet: (phrase){
+        :: print("Hi, " + phrase + " I am " + name)
     }
 }
 
@@ -23,4 +22,4 @@ var p = person["Green", 23]
 fibo(a)
 
 print(fibo(3))
-print(p.name, p.fibo(3))
+print(p.name, p.geet("Good Morning")))

@@ -26,25 +26,6 @@ Or a derivative type:
 - Map
 - List
 
-List is a special Map, i.e.
-
-```howlang
-var c = {1,2,3,4}
-var c = {
-    0: 1,
-    1: 2,
-    2: 3,
-    4: 4
-}
-var c = (n){
-    n == 0: 1,
-    n == 1: 2,
-    n == 2: 3,
-    n == 4: 4
-}
-c(0)
-```
-
 ## Declare a function
 
 ```howlang
@@ -69,6 +50,43 @@ var max = (nums){
     :: max_two(nums(0), max(nums(0:)))
 }
 ```
+
+Map is a special Function, i.e.
+
+```howlang
+var b = {
+    name: "Kelly",
+    age: 21
+}
+
+var b = (name, age) {
+    name: "Kelly",
+    age:21
+}
+
+b(name) # shortcut executation
+```
+
+List is a special Map/Function, i.e.
+
+```howlang
+var c = {1,2,3,4}
+var c = {
+    0: 1,
+    1: 2,
+    2: 3,
+    4: 4
+}
+var c = (n){
+    n == 0: 1,
+    n == 1: 2,
+    n == 2: 3,
+    n == 4: 4
+}
+c(0)
+```
+
+Or, you can also say that Function is a special Map, with a default key ":".
 
 ## Declare a class
 
@@ -102,3 +120,13 @@ There is no "if", a block "{}" is by default a branching map.
 ## Loop
 
 There is no iteration loop, every loop should be conducted recursively.
+
+Get the sum of a list:
+
+```howlang
+var sum = (nums){
+    len(nums) == 1: nums(0),
+    :: nums(0) + sum(nums(1:))
+}
+```
+
