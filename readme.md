@@ -15,12 +15,14 @@ var b = {
 var c = {1,2,3,4}
 var d = "Kelly"
 var e = true
+var f = none
 ```
 
 A variable can be declared without type hint, it can be a primitive type:
 - Number
 - String
 - Bool
+- None
 
 Or a derivative type:
 - Map
@@ -102,7 +104,7 @@ var person = [name, age]{
 }
 
 var p = person["Green", 21]
-p:greet()
+p.greet()
 ```
 
 A class is a special type of Map that accepts arguments for initialization. It is a bundle of callable variables and non-callable variables.

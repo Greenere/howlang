@@ -5,11 +5,17 @@ var node = [val, left, right, leaf] {
     leaf:leaf
 }
 
-var root = node[0,none, none, false]
-root:left = node[1, none, none, true]
-root:right = node[2, none, none, true]
+var root = node[0,
+                node[1, none, none, true],
+                node[2, none, none, true], 
+                false]
 
+var traverse = (node){
+    node == none: {},
+    node.leaf: {node.val},
+    ::traverse(node.left) + {node.val} + traverse(node.right)
+}
 
+var res = traverse(root)
 
-
-
+print(res)
