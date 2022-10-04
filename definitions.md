@@ -9,8 +9,8 @@ This is a for-fun programming language
 ```howlang
 var a = 2
 var b = {
-    name: "Kelly",
-    age: 21
+    "name": "Kelly",
+    "age": 21
 }
 var c = {1,2,3,4}
 var d = "Kelly"
@@ -55,16 +55,16 @@ Map is a special Function, i.e.
 
 ```howlang
 var b = {
-    name: "Kelly",
-    age: 21
+    "name": "Kelly",
+    "age": 21
 }
 
-var b = (name, age) {
-    name: "Kelly",
-    age:21
+var b = (key) {
+    key == "name": "Kelly",
+    key == "age":21
 }
 
-b(name) # shortcut executation
+b("name")
 ```
 
 List is a special Map/Function, i.e.
@@ -88,7 +88,7 @@ c(0)
 
 Or, you can also say that Function is a special Map, with a default key ":".
 
-## Declare a class
+## Declare a class [TODO]
 
 ```howlang
 var person = [name, age]{
