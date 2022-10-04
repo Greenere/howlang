@@ -34,7 +34,7 @@ var sum = (a,b){
 }
 ```
 
-A function is a special type of Map that accepts arguments with a default mapping option "::" that denotes the return. The function is by default a branching map, which means that when it is called, only the one with key that evaluates true will be set off.
+A function is a logical mapping that accepts arguments with a default mapping option "::" that denotes the default key. The function is by default a branching map, which means that when it is called, only the one with key that evaluates true will be set off.
 
 Local variables:
 
@@ -88,7 +88,9 @@ c(0)
 
 Or, you can also say that Function is a special Map, with a default key ":".
 
-## Declare a class [TODO]
+## Declare a class
+
+Do we really need class?
 
 ```howlang
 var person = [name, age]{
@@ -100,7 +102,7 @@ var person = [name, age]{
 }
 
 var p = person["Green", 21]
-p.greet()
+p:greet()
 ```
 
 A class is a special type of Map that accepts arguments for initialization. It is a bundle of callable variables and non-callable variables.
@@ -109,8 +111,8 @@ A class is a special type of Map that accepts arguments for initialization. It i
 
 ```howlang
 (){
-    2 > 1: print("Hi, 2 > 1")
-    2 == 1: print("Hi, 2 == 1")
+    2 > 1: print("Hi, 2 > 1"),
+    2 == 1: print("Hi, 2 == 1"),
     2 < 1: print("Hi, 2 < 1")
 }()
 ```

@@ -1,0 +1,15 @@
+var node = [val, left, right, leaf] {
+    val:val,
+    left:left,
+    right:right,
+    leaf:leaf
+}
+
+var root = node[0,none, none, false]
+root:left = node[1, none, none, true]
+root:right = node[2, none, none, true]
+
+
+
+
+

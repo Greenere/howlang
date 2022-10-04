@@ -13,8 +13,8 @@ var person = [name, age]{
 
 var a = 2
 var b = {
-    name: "Kelly",
-    age: 21
+    'name': "Kelly",
+    'age': 21
 }
 var c = {1,2,3}
 var p = person["Green", 23]
