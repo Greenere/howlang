@@ -278,135 +278,291 @@
       {
         "source": "0",
         "target": "1",
-        "condition": "operator"
+        "condition": "operator",
+        "bind": "operator_0_1"
       },
       {
         "source": "0",
         "target": "2",
-        "condition": "separator"
+        "condition": "separator",
+        "bind": "separator_0_2"
       },
       {
         "source": "0",
         "target": "3",
-        "condition": "space"
+        "condition": "space",
+        "bind": "space_0_3"
       },
       {
         "source": "0",
         "target": "4",
-        "condition": "bracket"
+        "condition": "bracket",
+        "bind": "bracket_0_4"
       },
       {
         "source": "0",
         "target": "5",
-        "condition": "0"
+        "condition": "0",
+        "bind": "0_0_5"
       },
       {
         "source": "0",
         "target": "6",
-        "condition": "digit"
+        "condition": "digit",
+        "bind": "digit_0_6"
       },
       {
         "source": "0",
         "target": "7",
-        "condition": "alphabet"
+        "condition": "alphabet",
+        "bind": "alphabet_0_7"
       },
       {
         "source": "0",
         "target": "8",
-        "condition": "v"
+        "condition": "v",
+        "bind": "v_0_8"
       },
       {
         "source": "5",
         "target": "9",
-        "condition": "space/separator/operator/bracket"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_5_9"
       },
       {
         "source": "5",
         "target": "10",
-        "condition": "."
+        "condition": ".",
+        "bind": "._5_10"
       },
       {
         "source": "6",
         "target": "6",
-        "condition": "digit"
+        "condition": "digit",
+        "bind": "digit_6_6"
       },
       {
         "source": "6",
         "target": "9",
-        "condition": "space/separator/operator/bracket"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_6_9"
       },
       {
         "source": "6",
         "target": "10",
-        "condition": "."
+        "condition": ".",
+        "bind": "._6_10"
       },
       {
         "source": "7",
         "target": "11",
-        "condition": "space/separator/operator/bracket"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_7_11"
       },
       {
         "source": "7",
         "target": "7",
-        "condition": "alphabet/digit"
+        "condition": "alphabet/digit",
+        "bind": "alphabet/digit_7_7"
       },
       {
         "source": "8",
         "target": "0",
-        "condition": "alphabet/digit"
+        "condition": "alphabet/digit",
+        "bind": "alphabet/digit_8_0"
       },
       {
         "source": "8",
         "target": "11",
-        "condition": "space/separator/operator/bracket"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_8_11"
       },
       {
         "source": "8",
         "target": "12",
-        "condition": "a"
+        "condition": "a",
+        "bind": "a_8_12"
       },
       {
         "source": "10",
         "target": "13",
-        "condition": "digit"
+        "condition": "digit",
+        "bind": "digit_10_13"
       },
       {
         "source": "12",
         "target": "0",
-        "condition": "alphabet/digit"
+        "condition": "alphabet/digit",
+        "bind": "alphabet/digit_12_0"
       },
       {
         "source": "12",
         "target": "11",
-        "condition": "space/separator/operator/bracket"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_12_11"
       },
       {
         "source": "12",
         "target": "14",
-        "condition": "r"
+        "condition": "r",
+        "bind": "r_12_14"
       },
       {
         "source": "13",
         "target": "13",
-        "condition": "digit"
+        "condition": "digit",
+        "bind": "digit_13_13"
       },
       {
         "source": "13",
         "target": "9",
-        "condition": "space/separator/operator/bracket"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_13_9"
       },
       {
         "source": "14",
         "target": "0",
-        "condition": "alphabet/digit"
+        "condition": "alphabet/digit",
+        "bind": "alphabet/digit_14_0"
       },
       {
         "source": "14",
         "target": "15",
-        "condition": "space"
+        "condition": "space",
+        "bind": "space_14_15"
       }
     ],
     "nodes": [
+      {
+        "id": "operator_0_1",
+        "type": "CONDITION",
+        "name": "operator"
+      },
+      {
+        "id": "separator_0_2",
+        "type": "CONDITION",
+        "name": "separator"
+      },
+      {
+        "id": "space_0_3",
+        "type": "CONDITION",
+        "name": "space"
+      },
+      {
+        "id": "bracket_0_4",
+        "type": "CONDITION",
+        "name": "bracket"
+      },
+      {
+        "id": "0_0_5",
+        "type": "CONDITION",
+        "name": "0"
+      },
+      {
+        "id": "digit_0_6",
+        "type": "CONDITION",
+        "name": "digit"
+      },
+      {
+        "id": "alphabet_0_7",
+        "type": "CONDITION",
+        "name": "alphabet"
+      },
+      {
+        "id": "v_0_8",
+        "type": "CONDITION",
+        "name": "v"
+      },
+      {
+        "id": "space/separator/operator/bracket_5_9",
+        "type": "CONDITION",
+        "name": "space/separator/operator/bracket"
+      },
+      {
+        "id": "._5_10",
+        "type": "CONDITION",
+        "name": "."
+      },
+      {
+        "id": "digit_6_6",
+        "type": "CONDITION",
+        "name": "digit"
+      },
+      {
+        "id": "space/separator/operator/bracket_6_9",
+        "type": "CONDITION",
+        "name": "space/separator/operator/bracket"
+      },
+      {
+        "id": "._6_10",
+        "type": "CONDITION",
+        "name": "."
+      },
+      {
+        "id": "space/separator/operator/bracket_7_11",
+        "type": "CONDITION",
+        "name": "space/separator/operator/bracket"
+      },
+      {
+        "id": "alphabet/digit_7_7",
+        "type": "CONDITION",
+        "name": "alphabet/digit"
+      },
+      {
+        "id": "alphabet/digit_8_0",
+        "type": "CONDITION",
+        "name": "alphabet/digit"
+      },
+      {
+        "id": "space/separator/operator/bracket_8_11",
+        "type": "CONDITION",
+        "name": "space/separator/operator/bracket"
+      },
+      {
+        "id": "a_8_12",
+        "type": "CONDITION",
+        "name": "a"
+      },
+      {
+        "id": "digit_10_13",
+        "type": "CONDITION",
+        "name": "digit"
+      },
+      {
+        "id": "alphabet/digit_12_0",
+        "type": "CONDITION",
+        "name": "alphabet/digit"
+      },
+      {
+        "id": "space/separator/operator/bracket_12_11",
+        "type": "CONDITION",
+        "name": "space/separator/operator/bracket"
+      },
+      {
+        "id": "r_12_14",
+        "type": "CONDITION",
+        "name": "r"
+      },
+      {
+        "id": "digit_13_13",
+        "type": "CONDITION",
+        "name": "digit"
+      },
+      {
+        "id": "space/separator/operator/bracket_13_9",
+        "type": "CONDITION",
+        "name": "space/separator/operator/bracket"
+      },
+      {
+        "id": "alphabet/digit_14_0",
+        "type": "CONDITION",
+        "name": "alphabet/digit"
+      },
+      {
+        "id": "space_14_15",
+        "type": "CONDITION",
+        "name": "space"
+      },
       {
         "id": "0",
         "type": "START"
@@ -470,6 +626,268 @@
       {
         "id": "15",
         "type": "RESERVED"
+      }
+    ],
+    "binds": [
+      {
+        "source": "0",
+        "target": "operator_0_1",
+        "condition": "operator"
+      },
+      {
+        "source": "operator_0_1",
+        "target": "1",
+        "condition": "operator"
+      },
+      {
+        "source": "0",
+        "target": "separator_0_2",
+        "condition": "separator"
+      },
+      {
+        "source": "separator_0_2",
+        "target": "2",
+        "condition": "separator"
+      },
+      {
+        "source": "0",
+        "target": "space_0_3",
+        "condition": "space"
+      },
+      {
+        "source": "space_0_3",
+        "target": "3",
+        "condition": "space"
+      },
+      {
+        "source": "0",
+        "target": "bracket_0_4",
+        "condition": "bracket"
+      },
+      {
+        "source": "bracket_0_4",
+        "target": "4",
+        "condition": "bracket"
+      },
+      {
+        "source": "0",
+        "target": "0_0_5",
+        "condition": "0"
+      },
+      {
+        "source": "0_0_5",
+        "target": "5",
+        "condition": "0"
+      },
+      {
+        "source": "0",
+        "target": "digit_0_6",
+        "condition": "digit"
+      },
+      {
+        "source": "digit_0_6",
+        "target": "6",
+        "condition": "digit"
+      },
+      {
+        "source": "0",
+        "target": "alphabet_0_7",
+        "condition": "alphabet"
+      },
+      {
+        "source": "alphabet_0_7",
+        "target": "7",
+        "condition": "alphabet"
+      },
+      {
+        "source": "0",
+        "target": "v_0_8",
+        "condition": "v"
+      },
+      {
+        "source": "v_0_8",
+        "target": "8",
+        "condition": "v"
+      },
+      {
+        "source": "5",
+        "target": "space/separator/operator/bracket_5_9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "space/separator/operator/bracket_5_9",
+        "target": "9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "5",
+        "target": "._5_10",
+        "condition": "."
+      },
+      {
+        "source": "._5_10",
+        "target": "10",
+        "condition": "."
+      },
+      {
+        "source": "6",
+        "target": "digit_6_6",
+        "condition": "digit"
+      },
+      {
+        "source": "digit_6_6",
+        "target": "6",
+        "condition": "digit"
+      },
+      {
+        "source": "6",
+        "target": "space/separator/operator/bracket_6_9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "space/separator/operator/bracket_6_9",
+        "target": "9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "6",
+        "target": "._6_10",
+        "condition": "."
+      },
+      {
+        "source": "._6_10",
+        "target": "10",
+        "condition": "."
+      },
+      {
+        "source": "7",
+        "target": "space/separator/operator/bracket_7_11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "space/separator/operator/bracket_7_11",
+        "target": "11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "7",
+        "target": "alphabet/digit_7_7",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "alphabet/digit_7_7",
+        "target": "7",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "8",
+        "target": "alphabet/digit_8_0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "alphabet/digit_8_0",
+        "target": "0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "8",
+        "target": "space/separator/operator/bracket_8_11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "space/separator/operator/bracket_8_11",
+        "target": "11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "8",
+        "target": "a_8_12",
+        "condition": "a"
+      },
+      {
+        "source": "a_8_12",
+        "target": "12",
+        "condition": "a"
+      },
+      {
+        "source": "10",
+        "target": "digit_10_13",
+        "condition": "digit"
+      },
+      {
+        "source": "digit_10_13",
+        "target": "13",
+        "condition": "digit"
+      },
+      {
+        "source": "12",
+        "target": "alphabet/digit_12_0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "alphabet/digit_12_0",
+        "target": "0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "12",
+        "target": "space/separator/operator/bracket_12_11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "space/separator/operator/bracket_12_11",
+        "target": "11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "12",
+        "target": "r_12_14",
+        "condition": "r"
+      },
+      {
+        "source": "r_12_14",
+        "target": "14",
+        "condition": "r"
+      },
+      {
+        "source": "13",
+        "target": "digit_13_13",
+        "condition": "digit"
+      },
+      {
+        "source": "digit_13_13",
+        "target": "13",
+        "condition": "digit"
+      },
+      {
+        "source": "13",
+        "target": "space/separator/operator/bracket_13_9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "space/separator/operator/bracket_13_9",
+        "target": "9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "14",
+        "target": "alphabet/digit_14_0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "alphabet/digit_14_0",
+        "target": "0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "14",
+        "target": "space_14_15",
+        "condition": "space"
+      },
+      {
+        "source": "space_14_15",
+        "target": "15",
+        "condition": "space"
       }
     ]
   }

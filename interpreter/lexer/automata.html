@@ -4,7 +4,7 @@
     <script src="https://d3js.org/d3.v7.min.js"></script>
   </head>
   <body>
-    <svg id="automata" width="800" height="500"></svg>
+    <svg id="automata" width="1000" height="500"></svg>
     <script>
           var svg = d3.select("svg#automata");
           var width = svg.attr("width");
@@ -20,16 +20,43 @@
             if (type == "START"){
               return "red";
             }
+            if (type == "CONDITION"){
+              return "green";
+            }
             return "blue";
           }
-          var type_force = (type)=>{
-            if (type == "NORMAL"){
-              return 0.5;
-            }
-            if (type == "START"){
+          var node_size = (type)=>{
+            if (type == "CONDITION"){
               return 1;
             }
-            return 0.25;
+            return 10;
+          }
+          var label_text = (d) => {
+            if (d.type == "NORMAL"){
+              return d.id;
+            }
+            if (d.type == "CONDITION"){
+              return d.name;
+            }
+            return d.id + ":" + d.type;
+          }
+          var terminal_force = (type)=>{
+            if (type == "NORMAL"){
+              return width/2;
+            }
+            if (type == "START"){
+              return width * 0.05;
+            }
+            if (type == "CONDITION"){
+              return width/2;
+            }
+            return width * 0.8;
+          }
+          var is_terminal = (type)=>{
+            if (type == "NORMAL" || type == "START" || type == "CONDITION"){
+              return false;
+            }
+            return true;
           }
           var linkColor = "black";
 
@@ -66,48 +93,105 @@
                   .forceLink()
                   .links(graph.links)
                   .id((d) => d.id)
-                  .distance(10)
+                  .distance(1)
               )
-              .force("repulse", d3.forceManyBody().strength(-2000))
+              .force(
+                "binds",
+                d3
+                  .forceLink()
+                  .links(graph.binds)
+                  .id((d) => d.id)
+                  .distance(1)
+              )
+              .force("repulse", d3.forceManyBody().strength(-2500))
               .force(
                 "centerx",
                 d3
                   .forceX()
-                  .x((d) => width * (1 - type_force(d.type)))
+                  .x((d) => terminal_force(d.type))
                   .strength(0.5)
               )
               .force(
                 "centery",
                 d3
                   .forceY()
-                  .y((d) => height / 2)
-                  .strength((d)=>type_force(d.type))
+                  .y((d) => height /2)
+                  .strength(1)
+              )
+              .force(
+                "terminal_align",
+                d3
+                  .forceY()
+                  .y((d) => height*0.8)
+                  .strength((d)=>is_terminal(d.type)?5:0)
+              )
+              .force(
+                "start_align",
+                d3
+                  .forceY()
+                  .y((d) => height*0.1)
+                  .strength((d)=>d.type=="START"?5:0)
               )
               .on("tick", ticked);
 
             simulation.stop();
 
+            var line_gen = d3.line()
+                  .x((p) => p.x)
+                  .y((p) => p.y)
+                  .curve(d3.curveCardinal);
+            var loop_gen = d3.line()
+                  .x((p) => p.x)
+                  .y((p) => p.y)
+                  .curve(d3.curveCardinalClosed);
+            
+            var get_bind = (bind)=>{
+              nodes = graph.nodes;
+              for (i = 0; i < nodes.length; i++){
+                if (nodes[i].id == bind) {
+                  return nodes[i];
+                }
+              }
+            }
+
+            var get_curve_points = (link) =>{
+              bind_point = get_bind(link.bind);
+              return [{x:link.source.x, y:link.source.y},
+                      {x:bind_point.x, y:bind_point.y},
+                      {x:link.target.x, y:link.target.y}];
+            }
+
+            var get_curve_points_loop = (link) =>{
+              bind_point = get_bind(link.bind);
+              return [{x:link.source.x, y:link.source.y},
+                      {x:link.source.x, y:bind_point.y},
+                      {x:bind_point.x, y:bind_point.y},
+                      {x:bind_point.x, y:link.target.y},
+                      {x:link.target.x, y:link.target.y}];
+            }
+
+            var get_path = (link) =>{
+              if (link.source.id != link.target.id){
+                return line_gen(get_curve_points(link));
+              }
+              return loop_gen(get_curve_points_loop(link));
+            }
+
             var lines = linkGroup
-              .selectAll("line.links")
+              .selectAll("path.links")
               .data(graph.links).join(
               (enter) => {
                 enter
-                  .append("line")
+                  .append("path")
                   .attr("class", `link`)
                   .attr("stroke", linkColor)
                   .attr("opacity", 0.2)
-                  .attr("x1", (d) => d.source.x)
-                  .attr("y1", (d) => d.source.y)
-                  .attr("x2", (d) => d.target.x)
-                  .attr("y2", (d) => d.target.y)
+                  .attr("d", (d)=>get_path(d))
+                  .attr("fill", "none")
                   .attr("marker-end", "url(#arrowhead)");
               },
               (update) => {
-                update
-                  .attr("x1", (d) => d.source.x)
-                  .attr("y1", (d) => d.source.y)
-                  .attr("x2", (d) => d.target.x)
-                  .attr("y2", (d) => d.target.y);
+                update.attr("d", (d)=>get_path(d))
               }
             );
 
@@ -120,7 +204,7 @@
                     .append("circle")
                     .attr("class", "node")
                     .attr("stroke", "none")
-                    .attr("r", nodeSize)
+                    .attr("r", (d)=>node_size(d.type))
                     .attr("cx", (d) => d.x)
                     .attr("cy", (d) => d.y)
                     .attr("fill", (d) => color(d.type))
@@ -147,7 +231,7 @@
                     .attr("class", "labels")
                     .attr("x", (d) => d.x + nodeSize)
                     .attr("y", (d) => d.y + nodeSize)
-                    .text((d) => d.id + ":" + d.type),
+                    .text((d) => label_text(d)),
                 (update) => {
                   update.attr("x", (d) => d.x + nodeSize)
                   .attr("y", (d) => d.y + nodeSize);
@@ -157,16 +241,13 @@
             simulation.tick(10);
             simulation.restart();
 
-            lines = linkGroup.selectAll("line.link");
+            lines = linkGroup.selectAll("path.link");
             circles = nodeGroup.selectAll("circle.node");
             texts = nodeGroup.selectAll("text.labels");
 
             function ticked() {
               lines
-                .attr("x1", (d) => d.source.x)
-                .attr("y1", (d) => d.source.y)
-                .attr("x2", (d) => d.target.x)
-                .attr("y2", (d) => d.target.y);
+               .attr("d", (d)=>get_path(d))
               circles.attr("cx", (d) => d.x).attr("cy", (d) => d.y);
               texts.attr("x", (d) => d.x + nodeSize)
               .attr("y", (d) => d.y + nodeSize);

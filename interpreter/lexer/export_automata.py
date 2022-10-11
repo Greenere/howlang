@@ -61,25 +61,42 @@ def build_relation_graph():
         for n in nei:
             edges.append([k, n[1], n[0]])
     
+    extended_links = []
     links = []
+    nodes = []
     for s,t, cond in edges:
-        links.append({
+        extended_links.append({
             'source':str(s),
+            'target':"%s_%s_%s"%(cond, s, t),
+            'condition':cond
+        })
+        extended_links.append({
+            'source':"%s_%s_%s"%(cond, s, t),
             'target':str(t),
             'condition':cond
         })
+        links.append({
+            'source':str(s),
+            'target':str(t),
+            'condition':cond,
+            'bind':"%s_%s_%s"%(cond, s, t)
+        })
+        nodes.append({
+            "id":"%s_%s_%s"%(cond, s, t),
+            "type":"CONDITION",
+            "name":cond
+        })
     
-    nodes = []
     for key in graph.keys():
         nodes.append({
             "id":str(key),
-            "type": "NORMAL" if key not in terms else terms[key]
+            "type": "NORMAL" if key not in terms else terms[key],
         })
 
-    return graph, terms, edges, nodes, links
+    return graph, terms, edges, nodes, links, extended_links
 
 if __name__ == "__main__":
-    graph, terms, edges, nodes, links = build_relation_graph()
+    graph, terms, edges, nodes, links, extended_links = build_relation_graph()
     automata = {
         'graph':graph,
         'terms': terms,
@@ -87,7 +104,8 @@ if __name__ == "__main__":
         'edges':edges,
         'data':{
             'links':links,
-            'nodes':nodes
+            'nodes':nodes,
+            'binds':extended_links
         }
     }
     with open('automata.json', 'w') as f:
