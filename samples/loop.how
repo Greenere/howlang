@@ -1,0 +1,22 @@
+var max = (nums){
+    len(nums) == 1: nums(0),
+    var cur = nums(0),
+    :: (1:len(nums)) = i{
+        cur < nums(i): cur = nums(i),
+        :: cur
+    }
+}
+
+var min = (nums){
+    len(nums) == 1: nums(0),
+    var cur = nums(0),
+    var i = 1,
+    (:)={
+        i > len(nums) - 1: break,
+        cur > nums(i): {
+            cur = nums(i),
+            i = i + 1
+        }
+    },
+    :: cur
+}

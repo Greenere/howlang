@@ -1,0 +1,476 @@
+{
+  "graph": {
+    "0": [
+      [
+        "operator",
+        1
+      ],
+      [
+        "separator",
+        2
+      ],
+      [
+        "space",
+        3
+      ],
+      [
+        "bracket",
+        4
+      ],
+      [
+        "0",
+        5
+      ],
+      [
+        "digit",
+        6
+      ],
+      [
+        "alphabet",
+        7
+      ],
+      [
+        "v",
+        8
+      ]
+    ],
+    "1": [],
+    "2": [],
+    "3": [],
+    "4": [],
+    "5": [
+      [
+        "space/separator/operator/bracket",
+        9
+      ],
+      [
+        ".",
+        10
+      ]
+    ],
+    "6": [
+      [
+        "digit",
+        6
+      ],
+      [
+        "space/separator/operator/bracket",
+        9
+      ],
+      [
+        ".",
+        10
+      ]
+    ],
+    "7": [
+      [
+        "space/separator/operator/bracket",
+        11
+      ],
+      [
+        "alphabet/digit",
+        7
+      ]
+    ],
+    "8": [
+      [
+        "alphabet/digit",
+        0
+      ],
+      [
+        "space/separator/operator/bracket",
+        11
+      ],
+      [
+        "a",
+        12
+      ]
+    ],
+    "9": [],
+    "10": [
+      [
+        "digit",
+        13
+      ]
+    ],
+    "11": [],
+    "12": [
+      [
+        "alphabet/digit",
+        0
+      ],
+      [
+        "space/separator/operator/bracket",
+        11
+      ],
+      [
+        "r",
+        14
+      ]
+    ],
+    "13": [
+      [
+        "digit",
+        13
+      ],
+      [
+        "space/separator/operator/bracket",
+        9
+      ]
+    ],
+    "14": [
+      [
+        "alphabet/digit",
+        0
+      ],
+      [
+        "space",
+        15
+      ]
+    ],
+    "15": []
+  },
+  "terms": {
+    "0": "START",
+    "1": "OPERATOR",
+    "2": "SEPARATOR",
+    "3": "SPACE",
+    "4": "BRACKET",
+    "9": "LITERAL",
+    "11": "VARIABLE",
+    "15": "RESERVED"
+  },
+  "start": 0,
+  "edges": [
+    [
+      0,
+      1,
+      "operator"
+    ],
+    [
+      0,
+      2,
+      "separator"
+    ],
+    [
+      0,
+      3,
+      "space"
+    ],
+    [
+      0,
+      4,
+      "bracket"
+    ],
+    [
+      0,
+      5,
+      "0"
+    ],
+    [
+      0,
+      6,
+      "digit"
+    ],
+    [
+      0,
+      7,
+      "alphabet"
+    ],
+    [
+      0,
+      8,
+      "v"
+    ],
+    [
+      5,
+      9,
+      "space/separator/operator/bracket"
+    ],
+    [
+      5,
+      10,
+      "."
+    ],
+    [
+      6,
+      6,
+      "digit"
+    ],
+    [
+      6,
+      9,
+      "space/separator/operator/bracket"
+    ],
+    [
+      6,
+      10,
+      "."
+    ],
+    [
+      7,
+      11,
+      "space/separator/operator/bracket"
+    ],
+    [
+      7,
+      7,
+      "alphabet/digit"
+    ],
+    [
+      8,
+      0,
+      "alphabet/digit"
+    ],
+    [
+      8,
+      11,
+      "space/separator/operator/bracket"
+    ],
+    [
+      8,
+      12,
+      "a"
+    ],
+    [
+      10,
+      13,
+      "digit"
+    ],
+    [
+      12,
+      0,
+      "alphabet/digit"
+    ],
+    [
+      12,
+      11,
+      "space/separator/operator/bracket"
+    ],
+    [
+      12,
+      14,
+      "r"
+    ],
+    [
+      13,
+      13,
+      "digit"
+    ],
+    [
+      13,
+      9,
+      "space/separator/operator/bracket"
+    ],
+    [
+      14,
+      0,
+      "alphabet/digit"
+    ],
+    [
+      14,
+      15,
+      "space"
+    ]
+  ],
+  "data": {
+    "links": [
+      {
+        "source": "0",
+        "target": "1",
+        "condition": "operator"
+      },
+      {
+        "source": "0",
+        "target": "2",
+        "condition": "separator"
+      },
+      {
+        "source": "0",
+        "target": "3",
+        "condition": "space"
+      },
+      {
+        "source": "0",
+        "target": "4",
+        "condition": "bracket"
+      },
+      {
+        "source": "0",
+        "target": "5",
+        "condition": "0"
+      },
+      {
+        "source": "0",
+        "target": "6",
+        "condition": "digit"
+      },
+      {
+        "source": "0",
+        "target": "7",
+        "condition": "alphabet"
+      },
+      {
+        "source": "0",
+        "target": "8",
+        "condition": "v"
+      },
+      {
+        "source": "5",
+        "target": "9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "5",
+        "target": "10",
+        "condition": "."
+      },
+      {
+        "source": "6",
+        "target": "6",
+        "condition": "digit"
+      },
+      {
+        "source": "6",
+        "target": "9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "6",
+        "target": "10",
+        "condition": "."
+      },
+      {
+        "source": "7",
+        "target": "11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "7",
+        "target": "7",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "8",
+        "target": "0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "8",
+        "target": "11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "8",
+        "target": "12",
+        "condition": "a"
+      },
+      {
+        "source": "10",
+        "target": "13",
+        "condition": "digit"
+      },
+      {
+        "source": "12",
+        "target": "0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "12",
+        "target": "11",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "12",
+        "target": "14",
+        "condition": "r"
+      },
+      {
+        "source": "13",
+        "target": "13",
+        "condition": "digit"
+      },
+      {
+        "source": "13",
+        "target": "9",
+        "condition": "space/separator/operator/bracket"
+      },
+      {
+        "source": "14",
+        "target": "0",
+        "condition": "alphabet/digit"
+      },
+      {
+        "source": "14",
+        "target": "15",
+        "condition": "space"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "0",
+        "type": "START"
+      },
+      {
+        "id": "1",
+        "type": "OPERATOR"
+      },
+      {
+        "id": "2",
+        "type": "SEPARATOR"
+      },
+      {
+        "id": "3",
+        "type": "SPACE"
+      },
+      {
+        "id": "4",
+        "type": "BRACKET"
+      },
+      {
+        "id": "5",
+        "type": "NORMAL"
+      },
+      {
+        "id": "6",
+        "type": "NORMAL"
+      },
+      {
+        "id": "7",
+        "type": "NORMAL"
+      },
+      {
+        "id": "8",
+        "type": "NORMAL"
+      },
+      {
+        "id": "9",
+        "type": "LITERAL"
+      },
+      {
+        "id": "10",
+        "type": "NORMAL"
+      },
+      {
+        "id": "11",
+        "type": "VARIABLE"
+      },
+      {
+        "id": "12",
+        "type": "NORMAL"
+      },
+      {
+        "id": "13",
+        "type": "NORMAL"
+      },
+      {
+        "id": "14",
+        "type": "NORMAL"
+      },
+      {
+        "id": "15",
+        "type": "RESERVED"
+      }
+    ]
+  }
+}

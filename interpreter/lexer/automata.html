@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+  </head>
+  <body>
+    <svg id="automata" width="800" height="500"></svg>
+    <script>
+          var svg = d3.select("svg#automata");
+          var width = svg.attr("width");
+          var height = svg.attr("height");
+
+          var linkGroup = svg.append("g").attr("id", "links");
+          var nodeGroup = svg.append("g").attr("id", "nodes");
+
+          var color = (type)=>{
+            if (type == "NORMAL"){
+              return "black";
+            }
+            if (type == "START"){
+              return "red";
+            }
+            return "blue";
+          }
+          var type_force = (type)=>{
+            if (type == "NORMAL"){
+              return 0.5;
+            }
+            if (type == "START"){
+              return 1;
+            }
+            return 0.25;
+          }
+          var linkColor = "black";
+
+          const refX = 20;
+          const refY = 0;
+          const markerWidth = 15;
+          const markerHeight = 15;
+
+          const nodeSize = 10;
+
+          linkGroup
+            .append("defs")
+            .append("marker")
+            .attr("id", "arrowhead")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", refX)
+            .attr("refY", refY)
+            .attr("markerWidth", markerWidth)
+            .attr("markerHeight", markerHeight)
+            .attr("orient", "auto")
+            .attr("fill", linkColor)
+            .append("path")
+            .attr("d", "M0,-5L10,0L0,5");
+
+          d3.json("automata.json").then((automata) => {
+            var graph = automata.data;
+
+            var simulation = d3
+              .forceSimulation()
+              .nodes(graph.nodes)
+              .force(
+                "links",
+                d3
+                  .forceLink()
+                  .links(graph.links)
+                  .id((d) => d.id)
+                  .distance(10)
+              )
+              .force("repulse", d3.forceManyBody().strength(-2000))
+              .force(
+                "centerx",
+                d3
+                  .forceX()
+                  .x((d) => width * (1 - type_force(d.type)))
+                  .strength(0.5)
+              )
+              .force(
+                "centery",
+                d3
+                  .forceY()
+                  .y((d) => height / 2)
+                  .strength((d)=>type_force(d.type))
+              )
+              .on("tick", ticked);
+
+            simulation.stop();
+
+            var lines = linkGroup
+              .selectAll("line.links")
+              .data(graph.links).join(
+              (enter) => {
+                enter
+                  .append("line")
+                  .attr("class", `link`)
+                  .attr("stroke", linkColor)
+                  .attr("opacity", 0.2)
+                  .attr("x1", (d) => d.source.x)
+                  .attr("y1", (d) => d.source.y)
+                  .attr("x2", (d) => d.target.x)
+                  .attr("y2", (d) => d.target.y)
+                  .attr("marker-end", "url(#arrowhead)");
+              },
+              (update) => {
+                update
+                  .attr("x1", (d) => d.source.x)
+                  .attr("y1", (d) => d.source.y)
+                  .attr("x2", (d) => d.target.x)
+                  .attr("y2", (d) => d.target.y);
+              }
+            );
+
+            var nodes = nodeGroup
+              .selectAll("circle.node")
+              .data(graph.nodes)
+              .join(
+                (enter) =>
+                  enter
+                    .append("circle")
+                    .attr("class", "node")
+                    .attr("stroke", "none")
+                    .attr("r", nodeSize)
+                    .attr("cx", (d) => d.x)
+                    .attr("cy", (d) => d.y)
+                    .attr("fill", (d) => color(d.type))
+                    .attr("opacity", 1)
+                    .call(
+                  d3
+                    .drag()
+                    .on("start", dragstart)
+                    .on("drag", dragging)
+                    .on("end", dragend)
+                ),
+                (update) => {
+                  update.attr("cx", (d) => d.x).attr("cy", (d) => d.y);
+                }
+              );
+
+            let texts = nodeGroup
+              .selectAll("text.labels")
+              .data(graph.nodes)
+              .join(
+                (enter) =>
+                  enter
+                    .append("text")
+                    .attr("class", "labels")
+                    .attr("x", (d) => d.x + nodeSize)
+                    .attr("y", (d) => d.y + nodeSize)
+                    .text((d) => d.id + ":" + d.type),
+                (update) => {
+                  update.attr("x", (d) => d.x + nodeSize)
+                  .attr("y", (d) => d.y + nodeSize);
+                }
+              );
+
+            simulation.tick(10);
+            simulation.restart();
+
+            lines = linkGroup.selectAll("line.link");
+            circles = nodeGroup.selectAll("circle.node");
+            texts = nodeGroup.selectAll("text.labels");
+
+            function ticked() {
+              lines
+                .attr("x1", (d) => d.source.x)
+                .attr("y1", (d) => d.source.y)
+                .attr("x2", (d) => d.target.x)
+                .attr("y2", (d) => d.target.y);
+              circles.attr("cx", (d) => d.x).attr("cy", (d) => d.y);
+              texts.attr("x", (d) => d.x + nodeSize)
+              .attr("y", (d) => d.y + nodeSize);
+            }
+
+            function dragstart(event, d) {
+        if (!event.active) {
+          simulation.alphaTarget(0.08).restart();
+        }
+        d.fx = event.x;
+        d.fy = event.y;
+      }
+
+      function dragging(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+      }
+
+      function dragend(event, d) {
+        if (!event.active) {
+          simulation.alphaTarget(0);
+        }
+        d.fx = null;
+        d.fy = null;
+      }
+    });
+    </script>
+  </body>
+</html>

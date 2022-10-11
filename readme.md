@@ -47,7 +47,7 @@ var max_two = (a, b){
 }
 
 var max = (nums){
-    n: len(nums), # this is a local variable
+    var n = len(nums), # this is a local variable
     n == 1: nums(0),
     :: max_two(nums(0), max(nums(0:)))
 }
@@ -113,7 +113,7 @@ A class is a special type of Map that accepts arguments for initialization. It i
 
 ```howlang
 (){
-    2 > 1: print("Hi, 2 > 1"),
+    2 > 1: print("Hi, 2 > 1"), # equivalent to `if 2 > 1 return print("Hi, 2 > 1")`
     2 == 1: print("Hi, 2 == 1"),
     2 < 1: print("Hi, 2 < 1")
 }()
@@ -121,9 +121,9 @@ A class is a special type of Map that accepts arguments for initialization. It i
 
 There is no "if", a block "{}" is by default a branching map.
 
-## Loop
+## Loop & Local Variables
 
-There is no iteration loop, every loop should be conducted recursively.
+Loop should be conducted recursively to make it more elegant.
 
 Get the sum of a list:
 
@@ -131,6 +131,51 @@ Get the sum of a list:
 var sum = (nums){
     len(nums) == 1: nums(0),
     :: nums(0) + sum(nums(1:))
+}
+```
+
+But it can also be made explicitly with a loop block.
+
+Bounded Loop:
+
+```howlang
+(0:10) = i {
+    print(i)
+}
+```
+
+Unbounded Loop: (Break it out some place)
+
+```howlang
+(:)={
+    break
+}
+```
+
+A more complicated example is shown below
+
+```howlang
+var max = (nums){
+    len(nums) == 1: nums(0),
+    var cur = nums(0),
+    :: (1:len(nums)) = i{
+        cur < nums(i): cur = nums(i),
+        :: cur
+    }()
+}
+
+var min = (nums){
+    len(nums) == 1: nums(0),
+    var cur = nums(0),
+    var i = 1,
+    (:)={
+        i > len(nums) - 1: break,
+        cur > nums(i): {
+            cur = nums(i),
+            i = i + 1
+        }
+    }(),
+    :: cur
 }
 ```
 
