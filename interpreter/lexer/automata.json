@@ -75,7 +75,7 @@
     "8": [
       [
         "alphabet/digit",
-        0
+        7
       ],
       [
         "space/separator/operator/bracket",
@@ -97,7 +97,7 @@
     "12": [
       [
         "alphabet/digit",
-        0
+        7
       ],
       [
         "space/separator/operator/bracket",
@@ -121,10 +121,10 @@
     "14": [
       [
         "alphabet/digit",
-        0
+        7
       ],
       [
-        "space",
+        "space/separator/operator/bracket",
         15
       ]
     ],
@@ -219,7 +219,7 @@
     ],
     [
       8,
-      0,
+      7,
       "alphabet/digit"
     ],
     [
@@ -239,7 +239,7 @@
     ],
     [
       12,
-      0,
+      7,
       "alphabet/digit"
     ],
     [
@@ -264,13 +264,13 @@
     ],
     [
       14,
-      0,
+      7,
       "alphabet/digit"
     ],
     [
       14,
       15,
-      "space"
+      "space/separator/operator/bracket"
     ]
   ],
   "data": {
@@ -367,9 +367,9 @@
       },
       {
         "source": "8",
-        "target": "0",
+        "target": "7",
         "condition": "alphabet/digit",
-        "bind": "alphabet/digit_8_0"
+        "bind": "alphabet/digit_8_7"
       },
       {
         "source": "8",
@@ -391,9 +391,9 @@
       },
       {
         "source": "12",
-        "target": "0",
+        "target": "7",
         "condition": "alphabet/digit",
-        "bind": "alphabet/digit_12_0"
+        "bind": "alphabet/digit_12_7"
       },
       {
         "source": "12",
@@ -421,15 +421,15 @@
       },
       {
         "source": "14",
-        "target": "0",
+        "target": "7",
         "condition": "alphabet/digit",
-        "bind": "alphabet/digit_14_0"
+        "bind": "alphabet/digit_14_7"
       },
       {
         "source": "14",
         "target": "15",
-        "condition": "space",
-        "bind": "space_14_15"
+        "condition": "space/separator/operator/bracket",
+        "bind": "space/separator/operator/bracket_14_15"
       }
     ],
     "nodes": [
@@ -509,7 +509,7 @@
         "name": "alphabet/digit"
       },
       {
-        "id": "alphabet/digit_8_0",
+        "id": "alphabet/digit_8_7",
         "type": "CONDITION",
         "name": "alphabet/digit"
       },
@@ -529,7 +529,7 @@
         "name": "digit"
       },
       {
-        "id": "alphabet/digit_12_0",
+        "id": "alphabet/digit_12_7",
         "type": "CONDITION",
         "name": "alphabet/digit"
       },
@@ -554,14 +554,14 @@
         "name": "space/separator/operator/bracket"
       },
       {
-        "id": "alphabet/digit_14_0",
+        "id": "alphabet/digit_14_7",
         "type": "CONDITION",
         "name": "alphabet/digit"
       },
       {
-        "id": "space_14_15",
+        "id": "space/separator/operator/bracket_14_15",
         "type": "CONDITION",
-        "name": "space"
+        "name": "space/separator/operator/bracket"
       },
       {
         "id": "0",
@@ -781,12 +781,12 @@
       },
       {
         "source": "8",
-        "target": "alphabet/digit_8_0",
+        "target": "alphabet/digit_8_7",
         "condition": "alphabet/digit"
       },
       {
-        "source": "alphabet/digit_8_0",
-        "target": "0",
+        "source": "alphabet/digit_8_7",
+        "target": "7",
         "condition": "alphabet/digit"
       },
       {
@@ -821,12 +821,12 @@
       },
       {
         "source": "12",
-        "target": "alphabet/digit_12_0",
+        "target": "alphabet/digit_12_7",
         "condition": "alphabet/digit"
       },
       {
-        "source": "alphabet/digit_12_0",
-        "target": "0",
+        "source": "alphabet/digit_12_7",
+        "target": "7",
         "condition": "alphabet/digit"
       },
       {
@@ -871,23 +871,23 @@
       },
       {
         "source": "14",
-        "target": "alphabet/digit_14_0",
+        "target": "alphabet/digit_14_7",
         "condition": "alphabet/digit"
       },
       {
-        "source": "alphabet/digit_14_0",
-        "target": "0",
+        "source": "alphabet/digit_14_7",
+        "target": "7",
         "condition": "alphabet/digit"
       },
       {
         "source": "14",
-        "target": "space_14_15",
-        "condition": "space"
+        "target": "space/separator/operator/bracket_14_15",
+        "condition": "space/separator/operator/bracket"
       },
       {
-        "source": "space_14_15",
+        "source": "space/separator/operator/bracket_14_15",
         "target": "15",
-        "condition": "space"
+        "condition": "space/separator/operator/bracket"
       }
     ]
   }

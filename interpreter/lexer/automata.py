@@ -1,4 +1,4 @@
-_RESERVE_CHARS = {'v','a','r'}
+_RESERVED_WORDS = {'var'}
 _OPERATOR_CHARS = {'.','/','+','-','*','=', ':', '<','>'}
 _SEPARATOR_CHARS = {',','\n'}
 _BRACKET_CHARS = {'(',')','[',']','{','}'}
@@ -59,6 +59,25 @@ class Autonode(object):
             return self.branch[condition]
         return None
 
+def _add_reserved_word(word, start, fallback, variable, reserved):
+    cur = Autonode()
+    start.add_jump(word[0], cur)
+    cur.add_jump(_ALPHABET, fallback)
+    cur.add_jump(_DIGIT, fallback)
+    cur.add_terminal_jumps(variable)
+    prev = cur 
+    for i, w in enumerate(word[1:]):
+        cur = Autonode()
+        prev.add_jump(w, cur)
+        cur.add_jump(_ALPHABET, fallback)
+        cur.add_jump(_DIGIT, fallback)
+        if i == len(word) - 2:
+            cur.add_terminal_jumps(reserved)
+        else:
+            cur.add_terminal_jumps(variable)
+        prev = cur
+    
+
 def _build_reserved_automata(start):
     reserved = Autonode(True, _TERM_RESERVED)
     variable = Autonode(True, _TERM_VARIABLE)
@@ -69,23 +88,8 @@ def _build_reserved_automata(start):
     v1.add_jump(_DIGIT, v1)
     start.add_jump(_ALPHABET, v1)
 
-    n1 = Autonode()
-    n1.add_jump(_ALPHABET, start)
-    n1.add_jump(_DIGIT, start)
-    n1.add_terminal_jumps(variable)
-    start.add_jump('v', n1)
-
-    n2 = Autonode()
-    n2.add_jump(_ALPHABET, start)
-    n2.add_jump(_DIGIT, start)
-    n2.add_terminal_jumps(variable)
-    n1.add_jump('a', n2)
-
-    n3 = Autonode()
-    n3.add_jump(_ALPHABET, start)
-    n3.add_jump(_DIGIT, start)
-    n3.add_jump(_SPACE, reserved)
-    n2.add_jump('r', n3)
+    for keyword in _RESERVED_WORDS:
+        _add_reserved_word(keyword, start, v1, variable, reserved)
 
 def _build_literal_automata(start):
     literal = Autonode(True, _TERM_LITERAL)
@@ -138,7 +142,7 @@ def print_tokens(tokens):
         _TERM_LITERAL: "LITERAL"
     }
 
-    return ''.join([str((r, c, chars, type_map[term]))+'\n' for r, c , chars, term in tokens])
+    return ''.join([str((r, c, chars, type_map[term])) + "\n" for r, c , chars, term in tokens])
 
 
 if __name__ == "__main__":
