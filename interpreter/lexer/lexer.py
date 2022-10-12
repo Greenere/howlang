@@ -26,10 +26,9 @@ class Lexer(object):
                     p = i + 1
                 else:
                     p = i + 1
-
-            if char == '\n':
-                row += 1
-                col = 0
+                    if char == '\n':
+                        row += 1
+                        col = 0
 
             i += 1
             col += 1
