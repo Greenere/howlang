@@ -36,8 +36,8 @@ class Lexer(object):
 
 if __name__ == "__main__":
     lexer = Lexer()
-    with open('../../samples/test.how', 'r') as f:
+    with open('../../samples/sample.how', 'r') as f:
         string = f.read()
     tokens = lexer.tokenize(string)
-    with open('temp/test.tokens', 'w') as f:
+    with open('temp/sample.tokens', 'w') as f:
         f.write(str(print_tokens(tokens)))
