@@ -20,13 +20,6 @@ typedef struct token {
     int right;
 } token_t;
 
-int is_identifier_char(char string){
-    if (string >= '0' && string <= '9') return 1;
-    if (string >= 'a' && string <= 'z') return 1;
-    if (string >= 'A' && string <= 'Z') return 1;
-    return 0;
-}
-
 int lexer_space(char string){
     if (string == ' '
      || string == '\n') return 1;
@@ -230,6 +223,6 @@ void lexer_how_code(const char * source, const char * target){
 }
 
 int main(int argc, char * argv[]){
-    lexer_how_code("../../samples/sample.how","./results/temp.tokens");
+    lexer_how_code("../../samples/basic.how","./results/temp.tokens");
     return 0;
 }
