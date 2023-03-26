@@ -11,8 +11,8 @@ var root = node[0,
                 false]
 
 var traverse = (node){
-    node == none: {},
-    node.leaf: {node.val},
+    node == none :: {},
+    node.leaf :: {node.val},
     ::traverse(node.left) + {node.val} + traverse(node.right)
 }
 

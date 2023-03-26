@@ -2,8 +2,6 @@
 
 Haoyang Li, 20221003
 
-This is a for-fun programming language
-
 ## Declare a variable
 
 ```howlang
@@ -36,19 +34,19 @@ var sum = (a,b){
 }
 ```
 
-A function is a logical mapping that accepts arguments with a default mapping option "::" that denotes the default key. The function is by default a branching map, which means that when it is called, only the one with key that evaluates true will be set off.
+The function is by default a branching map, which means that when it is called, only the one with key that evaluates true will be set off; using "::" means that this branch is going to be returned, by default, there should be an empty branch with "::".
 
 Local variables:
 
 ```howlang
 var max_two = (a, b){
-    a > b: a,
+    a > b :: a,
     :: b
 }
 
 var max = (nums){
     var n = len(nums), # this is a local variable
-    n == 1: nums(0),
+    n == 1 :: nums(0),
     :: max_two(nums(0), max(nums(0:)))
 }
 ```
@@ -92,8 +90,6 @@ Or, you can also say that Function is a special Map, with a default key ":".
 
 ## Declare a class
 
-Do we really need class?
-
 ```howlang
 var person = [name, age]{
     name: name,
@@ -113,13 +109,13 @@ A class is a special type of Map that accepts arguments for initialization. It i
 
 ```howlang
 (){
-    2 > 1: print("Hi, 2 > 1"), # equivalent to `if 2 > 1 return print("Hi, 2 > 1")`
-    2 == 1: print("Hi, 2 == 1"),
-    2 < 1: print("Hi, 2 < 1")
+    2 > 1 :: print("Hi, 2 > 1"), # equivalent to `if 2 > 1 return print("Hi, 2 > 1")`
+    2 == 1 :: print("Hi, 2 == 1"),
+    2 < 1 :: print("Hi, 2 < 1")
 }()
 ```
 
-There is no "if", a block "{}" is by default a branching map.
+There is no if-else statement in howlang. You can implement a branching by implement a function without parameter and call it right away as shown above.
 
 ## Loop & Local Variables
 
@@ -129,53 +125,69 @@ Get the sum of a list:
 
 ```howlang
 var sum = (nums){
-    len(nums) == 1: nums(0),
+    len(nums) == 1 :: nums(0),
     :: nums(0) + sum(nums(1:))
 }
 ```
 
 But it can also be made explicitly with a loop block.
 
-Bounded Loop:
+Sum with unbounded Loop:
 
 ```howlang
-(0:10) = i {
-    print(i)
+var sum = (nums){
+    var res = 0,
+    var i = 0,
+    (:) {
+        i < len(nums) : (){
+            res += i,
+            i += 1
+        }()
+        :: res # :: will break the unbounded loop
+    }()
+    :: res
 }
-```
 
-Unbounded Loop: (Break it out some place)
-
-```howlang
-(:)={
-    break
+# An equivalent implementation is shown below
+var sum = (nums){
+    var res = 0,
+    var i = 0,
+    :: (:) {
+        i < len(nums) : (){
+            res += i,
+            i += 1
+        }()
+        :: res # :: will break the unbounded loop and also return the result
+    }()
 }
 ```
 
 A more complicated example is shown below
 
 ```howlang
-var max = (nums){
-    len(nums) == 1: nums(0),
-    var cur = nums(0),
-    :: (1:len(nums)) = i{
-        cur < nums(i): cur = nums(i),
-        :: cur
-    }()
-}
-
 var min = (nums){
-    len(nums) == 1: nums(0),
+    len(nums) == 1 :: nums(0),
     var cur = nums(0),
     var i = 1,
-    (:)={
-        i > len(nums) - 1: break,
+    :: (:){
+        i > len(nums) - 1 :: cur,
         cur > nums(i): {
             cur = nums(i),
             i = i + 1
         }
-    }(),
-    :: cur
+    }()
 }
 ```
 
+In short, you should think unbounded loop as a special function that gets executed infinitely until it hits an "::", which is return, i.e.
+
+```
+# The following will loop until the condition "a > 10" is met
+var a = 0
+(:){
+    a > 10 :: print("a reached 10"),
+    a += 1
+}() # the result will be an output "a reached 10"
+```
+
+Be careful that "::" within the scope of a loop block will break the loop and return the result following "::".
