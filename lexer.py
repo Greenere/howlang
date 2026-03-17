@@ -13,6 +13,7 @@ class TT(Enum):
     # Keywords
     VAR       = auto()
     BREAK     = auto()
+    IMPORT    = auto()   # "how" keyword
     # Punctuation
     LPAREN    = auto()  # (
     RPAREN    = auto()  # )
@@ -67,6 +68,7 @@ KEYWORDS = {
     "or":    TT.OR,
     "not":   TT.NOT,
     "break": TT.BREAK,
+    "how":    TT.IMPORT,
 }
 
 class LexError(Exception):

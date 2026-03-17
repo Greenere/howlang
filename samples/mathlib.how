@@ -1,0 +1,28 @@
+# mathlib.how — a small math utility module to test imports
+
+var PI = 3.14159265358979
+
+var square = (n){ :: n * n }
+
+var cube = (n){ :: n * n * n }
+
+var clamp = (val, lo, hi){
+    val < lo :: lo,
+    val > hi :: hi,
+    :: val
+}
+
+var sum_list = (nums){
+    len(nums) == 1 :: nums(0),
+    :: nums(0) + sum_list(nums(1:))
+}
+
+var factorial = (n){
+    n <= 1 :: 1,
+    :: n * factorial(n - 1)
+}
+
+var fib = (n){
+    n < 2 :: n,
+    :: fib(n-1) + fib(n-2)
+}

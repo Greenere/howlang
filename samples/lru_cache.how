@@ -1,0 +1,121 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LRU Cache in Howlang
+#
+# Data structures:
+#   - Doubly-linked list tracks access order
+#       head.next → most-recently used  …  tail.prev → least-recently used
+#   - A map provides O(1) key → node lookup
+#
+# Sentinel nodes "head" and "tail" avoid nil-pointer edge cases everywhere.
+#
+# Builtins used:
+#   map()            create empty map
+#   has_key(m, k)    boolean key existence check
+#   set_key(m, k, v) set map[k] = v
+#   get_key(m, k)    get map[k] or none
+#   del_key(m, k)    delete map[k]
+#   keys(m)          list of keys
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── Doubly-linked list node ───────────────────────────────────────────────────
+
+var make_node = [k, v]{
+    key:  k,
+    val:  v,
+    prev: none,
+    next: none
+}
+
+
+# ── LRU Cache factory ─────────────────────────────────────────────────────────
+
+var lru_cache = [cap]{
+
+    # Sentinel head / tail – simplify list manipulation
+    var h = make_node["__head__", none],
+    var t = make_node["__tail__", none],
+    h.next = t,
+    t.prev = h,
+
+    capacity: cap,
+    size:     0,
+    store:    map(),
+    head:     h,
+    tail:     t,
+
+    # ── _remove: unlink a node from the list ─────────────────────────────────
+    _remove: (n){
+        n.prev.next = n.next,
+        n.next.prev = n.prev,
+        n.prev = none,
+        n.next = none
+    },
+
+    # ── _push_front: insert a node right after the head sentinel ─────────────
+    _push_front: (n){
+        n.next         = head.next,
+        n.prev         = head,
+        head.next.prev = n,
+        head.next      = n
+    },
+
+    # ── get: look up key; return value or none, and move node to front ────────
+    get: (k){
+        has_key(store, k) == false :: none,
+        var n = get_key(store, k),
+        _remove(n),
+        _push_front(n),
+        :: n.val
+    },
+
+    # ── put: insert or update; evict LRU entry if over capacity ──────────────
+    put: (k, v){
+        # Update path – key already in cache
+        has_key(store, k): {
+            var n = get_key(store, k),
+            n.val = v,
+            _remove(n),
+            _push_front(n)
+        },
+
+        # Insert path – new key
+        has_key(store, k) == false: {
+            var n = make_node[k, v],
+            set_key(store, k, n),
+            _push_front(n),
+            size = size + 1,
+
+            # Evict least-recently used when over capacity
+            size > capacity: {
+                var lru = tail.prev,
+                _remove(lru),
+                del_key(store, lru.key),
+                size = size - 1
+            }
+        }
+    },
+
+    # ── peek: read value without changing order (used in tests) ──────────────
+    peek: (k){
+        has_key(store, k) == false :: none,
+        :: get_key(store, k).val
+    },
+
+    # ── size_of: number of live entries ──────────────────────────────────────
+    size_of: (){
+        :: size
+    },
+
+    # ── order: keys from MRU → LRU as a list (used in tests) ─────────────────
+    order: (){
+        var result = list(),
+        var cur = head.next,
+        (:)={
+            cur.key == "__tail__": break,
+            push(result, cur.key),
+            cur = cur.next
+        },
+        :: result
+    }
+}

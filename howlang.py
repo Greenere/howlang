@@ -81,6 +81,10 @@ def run_file(path: str):
     with open(path, "r", encoding="utf-8") as f:
         source = f.read()
     interp = Interpreter()
+    # Add the file's own directory as the first import search path
+    file_dir = os.path.abspath(os.path.dirname(path))
+    if file_dir not in interp._import_dirs:
+        interp._import_dirs.insert(0, file_dir)
     run_source(source, interp, filename=path)
 
 def main():

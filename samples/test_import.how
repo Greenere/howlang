@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Import system tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        print("  PASS  " + label),
+        passed = passed + 1
+    },
+    got != expected: {
+        print("  FAIL  " + label + "  →  got: " + str(got) + "  expected: " + str(expected)),
+        failed = failed + 1
+    }
+}
+var assert_none = (label, val){ assert_eq(label, val, none) }
+
+
+# ── Import mathlib ────────────────────────────────────────────────────────────
+print("─── how mathlib ─────────────────────────────────────────────────────────")
+
+how mathlib
+
+assert_eq("PI constant",           mathlib.PI,              3.14159265358979)
+assert_eq("square(5)",             mathlib.square(5),       25)
+assert_eq("cube(3)",               mathlib.cube(3),         27)
+assert_eq("clamp below range",     mathlib.clamp(0, 5, 10), 5)
+assert_eq("clamp above range",     mathlib.clamp(20, 5, 10),10)
+assert_eq("clamp within range",    mathlib.clamp(7, 5, 10), 7)
+assert_eq("sum_list",              mathlib.sum_list({1,2,3,4,5}), 15)
+assert_eq("factorial(5)",          mathlib.factorial(5),    120)
+assert_eq("fib(10)",               mathlib.fib(10),         55)
+
+
+# ── Import lru_cache ─────────────────────────────────────────────────────────
+print("─── how lru_cache ───────────────────────────────────────────────────────")
+
+how lru_cache
+
+var c = lru_cache.lru_cache[3]
+
+c.put("x", 10)
+c.put("y", 20)
+c.put("z", 30)
+
+assert_eq("get x",          c.get("x"), 10)
+assert_eq("get y",          c.get("y"), 20)
+assert_eq("get z",          c.get("z"), 30)
+assert_eq("size",           c.size_of(), 3)
+
+# Access order after get x, get y, get z: z(MRU) → y → x(LRU)
+# Inserting w evicts x (LRU)
+c.put("w", 40)
+assert_none("x evicted",    c.get("x"))
+assert_eq("w present",      c.get("w"), 40)
+
+
+# ── Two modules at once ───────────────────────────────────────────────────────
+print("─── two modules in same file ────────────────────────────────────────────")
+
+# mathlib and lru_cache are both already imported above
+assert_eq("mathlib still works after lru_cache import", mathlib.square(4), 16)
+assert_eq("lru_cache still works after mathlib use",    c.get("w"), 40)
+
+
+# ── Module isolation: changes inside module don't leak ────────────────────────
+print("─── module isolation ────────────────────────────────────────────────────")
+
+# Defining a local var with the same name as a module export doesn't corrupt the module
+var square = 999
+assert_eq("local var shadows module name locally",  square, 999)
+assert_eq("module function unaffected",             mathlib.square(3), 9)
+
+
+# ── Re-import gives a fresh independent instance ─────────────────────────────
+print("─── re-import is independent ────────────────────────────────────────────")
+
+how lru_cache
+var c2 = lru_cache.lru_cache[2]
+c2.put("a", 1)
+
+# c (capacity 3) and c2 (capacity 2) are independent
+assert_eq("c2 get a",       c2.get("a"), 1)
+assert_none("c doesn't see c2's key",  c.get("a"))
+
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════")

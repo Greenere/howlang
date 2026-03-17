@@ -124,5 +124,17 @@ class ExprStmt:
     expr: Any
 
 @dataclass
+class ImportStmt:
+    """
+    how <module_name>
+    Loads <module_name>.how from the same directory, executes it in a fresh
+    interpreter, and binds the result as a HowModule under the name
+    <module_name> in the current scope.
+    e.g.  how lru_cache   →  lru_cache.lru_cache[3]
+    """
+    module: str   # bare filename stem, e.g. "lru_cache"
+
+
+@dataclass
 class Program:
     stmts: List[Any]

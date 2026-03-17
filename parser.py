@@ -67,6 +67,8 @@ class Parser:
     def stmt(self):
         if self.check(TT.VAR):
             return self.var_decl()
+        if self.check(TT.IMPORT):
+            return self.import_stmt()
         return self.expr_stmt()
 
     def var_decl(self) -> VarDecl:
@@ -75,6 +77,12 @@ class Parser:
         self.expect(TT.EQ)
         val = self.expr()
         return VarDecl(name, val)
+
+    def import_stmt(self) -> ImportStmt:
+        """how <module_name>  — loads <module_name>.how and binds it by name"""
+        self.expect(TT.IMPORT)
+        name = self.expect(TT.IDENT).value
+        return ImportStmt(name)
 
     def expr_stmt(self) -> ExprStmt:
         e = self.expr()
@@ -151,15 +159,14 @@ class Parser:
         while True:
             next_tok = self.peek()
             same_line = (next_tok.line == last_line)
-            callable_node = isinstance(node, (Identifier, Call, DotAccess))
-            if self.check(TT.LPAREN) and (same_line or callable_node):
+            if self.check(TT.LPAREN) and same_line:
                 args, is_slice, start, stop = self.call_args()
                 if is_slice:
                     node = Slice(node, start, stop)
                 else:
                     node = Call(node, args)
                 last_line = self.tokens[self.pos - 1].line
-            elif self.check(TT.LBRACKET) and (same_line or callable_node):
+            elif self.check(TT.LBRACKET) and same_line:
                 self.advance()
                 args = self.arg_list(TT.RBRACKET)
                 self.expect(TT.RBRACKET)
@@ -389,14 +396,37 @@ class Parser:
         return Branch(None, cond, is_return=False)
 
     def block(self) -> Block:
-        """{ stmt, stmt, ... }"""
+        """{ stmt/branch, ... }
+        Supports the same branch syntax as func_body so that nested blocks
+        inside a function can also contain  cond : body  sub-branches.
+        """
         self.expect(TT.LBRACE)
         stmts = []
         while not self.check(TT.RBRACE) and not self.check(TT.EOF):
             if self.check(TT.VAR):
                 stmts.append(self.var_decl())
+            elif self.check(TT.DCOLON):
+                # :: expr  inside a block — treat as return
+                stmts.append(self.branch())
+            elif self.check(TT.BREAK):
+                self.advance()
+                stmts.append(ExprStmt(BreakLoop()))
             else:
-                stmts.append(ExprStmt(self.expr()))
+                # Try to parse  expr  and see if : or :: follows → branch
+                e = self.expr()
+                if self.check(TT.COLON):
+                    self.advance()
+                    if self.check(TT.LBRACE):
+                        body = self.block()
+                    else:
+                        body = self.expr()
+                    stmts.append(Branch(e, body, is_return=False))
+                elif self.check(TT.DCOLON):
+                    self.advance()
+                    body = self.expr()
+                    stmts.append(Branch(e, body, is_return=True))
+                else:
+                    stmts.append(ExprStmt(e))
             self.match(TT.COMMA)
         self.expect(TT.RBRACE)
         return Block(stmts)

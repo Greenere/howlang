@@ -1,3 +1,4 @@
+import os
 """
 Tree-walking interpreter for Howlang.
 New in this version:
@@ -143,6 +144,27 @@ class HowList:
         return False
 
 
+class HowModule:
+    """
+    The result of  how <name>.
+    Wraps a freshly-executed Howlang environment, exposing its top-level
+    variables as attributes:  module.some_var  or  module.some_fn(args).
+    """
+    def __init__(self, name: str, env: "Environment"):
+        self._name = name
+        self._env  = env
+
+    def get_attr(self, attr: str) -> Any:
+        try:
+            return self._env.get(attr)
+        except HowError:
+            raise HowError(f"Module {self._name!r} has no export {attr!r}")
+
+    def __repr__(self):
+        public = [k for k in self._env.vars if not k.startswith("_")]
+        return f"<module:{self._name} exports={public}>"
+
+
 def how_repr(v) -> str:
     if v is None:      return "none"
     if v is True:      return "true"
@@ -153,14 +175,57 @@ def how_repr(v) -> str:
         return str(v)
     if isinstance(v, str):
         return v
+    if isinstance(v, HowModule):
+        return repr(v)
     return repr(v)
 
 
 # ── Interpreter ───────────────────────────────────────────────────────────────
 
+class InstanceEnv(Environment):
+    """
+    An Environment whose variables are backed by a HowInstance's fields dict.
+    Reads and writes to any name that matches a field key go directly to the
+    instance, so that method closures see live field values and mutations are
+    reflected back on the instance immediately.
+    """
+    def __init__(self, instance: "HowInstance", parent: "Environment"):
+        super().__init__(parent)
+        self._inst = instance
+
+    def get(self, name: str) -> Any:
+        # Check local vars first (method params, local var decls)
+        if name in self.vars:
+            return self.vars[name]
+        # Then instance fields
+        if name in self._inst.fields:
+            return self._inst.fields[name]
+        # Then parent chain (init params: cap, h, t, ...)
+        if self.parent:
+            return self.parent.get(name)
+        raise HowError(f"Undefined variable: {name!r}")
+
+    def assign(self, name: str, value: Any):
+        # Local var takes priority
+        if name in self.vars:
+            self.vars[name] = value
+            return
+        # Instance field
+        if name in self._inst.fields:
+            self._inst.fields[name] = value
+            return
+        # Parent chain
+        if self.parent:
+            self.parent.assign(name, value)
+            return
+        raise HowError(f"Assignment to undeclared variable: {name!r}")
+
+
 class Interpreter:
     def __init__(self):
         self.globals = Environment()
+        self._import_dirs: list = [os.getcwd()]
+        self._builtin_names: set = set()
         self._setup_builtins()
 
     def _setup_builtins(self):
@@ -253,6 +318,36 @@ class Interpreter:
             items = args[0].items if len(args) == 1 and isinstance(args[0], HowList) else args
             return min(items, key=lambda v: v if isinstance(v, (int,float)) else 0)
 
+        def _has_key(m, k):
+            if isinstance(m, HowMap):   return k in m.items
+            if isinstance(m, HowInstance): return k in m.fields
+            raise HowError("has_key() requires a map or instance")
+
+        def _set_key(m, k, v):
+            if isinstance(m, HowMap):
+                m.items[k] = v
+                return v
+            if isinstance(m, HowInstance):
+                m.fields[k] = v
+                return v
+            raise HowError("set_key() requires a map or instance")
+
+        def _del_key(m, k):
+            if isinstance(m, HowMap):
+                m.items.pop(k, None)
+                return None
+            if isinstance(m, HowInstance):
+                m.fields.pop(k, None)
+                return None
+            raise HowError("del_key() requires a map or instance")
+
+        def _get_key(m, k):
+            if isinstance(m, HowMap):
+                return m.items.get(k, None)
+            if isinstance(m, HowInstance):
+                return m.fields.get(k, None)
+            raise HowError("get_key() requires a map or instance")
+
         builtins = {
             "print": _print, "len": _len, "range": _range,
             "str": _str, "num": _num, "bool": _bool_fn, "type": _type,
@@ -260,9 +355,12 @@ class Interpreter:
             "keys": _keys, "values": _values, "input": _input,
             "abs": _abs, "floor": _floor, "ceil": _ceil,
             "sqrt": _sqrt, "max": _max_fn, "min": _min_fn,
+            "has_key": _has_key, "set_key": _set_key,
+            "del_key": _del_key, "get_key": _get_key,
         }
         for name, fn in builtins.items():
             g.set(name, fn)
+        self._builtin_names = set(builtins.keys())
 
     # ── Entry point ───────────────────────────────────────────────────────────
 
@@ -276,6 +374,8 @@ class Interpreter:
         if isinstance(stmt, VarDecl):
             val = self.eval(stmt.value, env)
             env.set(stmt.name, val)
+        elif isinstance(stmt, ImportStmt):
+            self.exec_import(stmt, env)
         elif isinstance(stmt, ExprStmt):
             self.eval(stmt.expr, env)
         elif isinstance(stmt, Block):
@@ -283,6 +383,48 @@ class Interpreter:
                 self.exec_stmt(s, env)
         else:
             self.eval(stmt, env)
+
+    def exec_import(self, stmt: "ImportStmt", env: Environment):
+        """
+        how <name>
+        Resolve <name>.how relative to the current search path, execute it
+        in a fresh child interpreter (sharing no mutable state), then bind
+        the resulting module env as a HowModule under <name>.
+        """
+        module_name = stmt.module
+        # Search paths: directories registered on the interpreter + cwd
+        candidate = None
+        for search_dir in self._import_dirs:
+            path = os.path.join(search_dir, module_name + ".how")
+            if os.path.isfile(path):
+                candidate = path
+                break
+        if candidate is None:
+            raise HowError(
+                f"Cannot find module {module_name!r} "
+                f"(searched: {self._import_dirs})"
+            )
+        # Execute the module in a fresh interpreter that inherits builtins
+        mod_interp = Interpreter()
+        # Pass import dirs so the module can itself import
+        mod_interp._import_dirs = self._import_dirs
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                source = f.read()
+            from lexer import Lexer as _Lexer
+            from parser import Parser as _Parser
+            tokens = _Lexer(source).tokenize()
+            ast    = _Parser(tokens).parse()
+            mod_interp.run(ast)
+        except Exception as e:
+            raise HowError(f"Error loading module {module_name!r}: {e}")
+        # Expose the module's global scope (minus builtins) as a HowModule
+        mod_env = Environment()
+        for k, v in mod_interp.globals.vars.items():
+            if k not in mod_interp._builtin_names:
+                mod_env.vars[k] = v
+        module = HowModule(module_name, mod_env)
+        env.set(module_name, module)
 
     # ── Expressions ───────────────────────────────────────────────────────────
 
@@ -313,6 +455,8 @@ class Interpreter:
                 return obj.get(node.attr)
             if isinstance(obj, HowMap):
                 return obj.get(node.attr)
+            if isinstance(obj, HowModule):
+                return obj.get_attr(node.attr)
             raise HowError(f"Cannot access .{node.attr} on {type(obj).__name__}")
 
         if isinstance(node, Call):
@@ -498,7 +642,18 @@ class Interpreter:
         if isinstance(body, Block):
             child = Environment(env)
             for s in body.stmts:
-                self.exec_stmt(s, child)
+                if isinstance(s, Branch):
+                    # Nested branch inside a block (cond : body syntax)
+                    if s.condition is not None:
+                        if not how_truthy(self.eval(s.condition, child)):
+                            continue
+                    if s.is_return:
+                        val = self.eval(s.body, child)
+                        raise HowReturn(val)
+                    else:
+                        self.exec_branch_body(s.body, child)
+                else:
+                    self.exec_stmt(s, child)
         elif isinstance(body, (VarDecl, ExprStmt)):
             self.exec_stmt(body, env)
         elif isinstance(body, BreakLoop):
@@ -577,23 +732,36 @@ class Interpreter:
 
         fields = {}
         for branch in cls.branches:
+            # 1. Local var declaration  (var x = ...)
             if isinstance(branch.body, VarDecl):
                 val = self.eval(branch.body.value, init_env)
                 init_env.set(branch.body.name, val)
                 continue
-            if branch.condition is not None:
-                # If the key is a bare identifier, use its name as a string key
-                # (e.g.  val: val  means field named "val", not variable value)
+
+            # 2. Named field  (fieldName: value  or  "key": value)
+            if branch.condition is not None and not branch.is_return:
                 if isinstance(branch.condition, Identifier):
                     key = branch.condition.name
                 else:
                     key = self.eval(branch.condition, init_env)
                 val = self.eval(branch.body, init_env)
                 fields[key] = val
+                continue
+
+            # 3. Unconditional side-effect  (e.g. h.next = t)
+            #    Executed immediately during class initialization.
+            if branch.condition is None and not branch.is_return:
+                self.exec_branch_body(branch.body, init_env)
+                continue
 
         inst = HowInstance(fields)
-        # Re-wrap methods so their closure includes the instance fields
-        inst_env = Environment(init_env)
+
+        # Build a proxy env that reads/writes through the instance's fields dict.
+        # This lets methods reference  size, store, head, tail, etc. as plain
+        # variable names while actually mutating the shared instance fields.
+        inst_env = InstanceEnv(inst, init_env)
+
+        # Re-wrap every method so its closure is the instance-proxy env
         for k, v in list(fields.items()):
             if isinstance(v, HowFunction):
                 fields[k] = HowFunction(v.params, v.branches, inst_env, v.is_loop)

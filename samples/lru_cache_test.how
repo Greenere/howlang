@@ -1,0 +1,172 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LRU Cache – Test Suite
+# ─────────────────────────────────────────────────────────────────────────────
+
+how lru_cache
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        print("  PASS  " + label),
+        passed = passed + 1
+    },
+    got != expected: {
+        print("  FAIL  " + label + "  →  got: " + str(got) + "  expected: " + str(expected)),
+        failed = failed + 1
+    }
+}
+
+var assert_true = (label, val){
+    assert_eq(label, val, true)
+}
+
+var assert_none = (label, val){
+    assert_eq(label, val, none)
+}
+
+
+print("─── Basic get / put ─────────────────────────────────────────────────────")
+
+var c1 = lru_cache.lru_cache[3]
+c1.put("a", 1)
+c1.put("b", 2)
+c1.put("c", 3)
+
+assert_eq("get existing key a",    c1.get("a"), 1)
+assert_eq("get existing key b",    c1.get("b"), 2)
+assert_eq("get existing key c",    c1.get("c"), 3)
+assert_none("get missing key",     c1.get("z"))
+assert_eq("size after 3 inserts",  c1.size_of(), 3)
+
+
+print("─── Eviction (LRU removed when over capacity) ───────────────────────────")
+
+var c2 = lru_cache.lru_cache[3]
+c2.put("a", 1)
+c2.put("b", 2)
+c2.put("c", 3)
+# order: c (MRU) → b → a (LRU)
+c2.put("d", 4)
+# "a" was LRU → evicted; order: d → c → b
+
+assert_none("evicted key a is gone",        c2.get("a"))
+assert_eq("non-evicted key b survives",     c2.get("b"), 2)
+assert_eq("non-evicted key c survives",     c2.get("c"), 3)
+assert_eq("newly inserted key d survives",  c2.get("d"), 4)
+assert_eq("size stays at capacity",         c2.size_of(), 3)
+
+
+print("─── Access order updates (get promotes to MRU) ───────────────────────────")
+
+var c3 = lru_cache.lru_cache[3]
+c3.put("x", 10)
+c3.put("y", 20)
+c3.put("z", 30)
+# order: z → y → x (LRU)
+
+# Promote x — it is no longer LRU; y becomes LRU
+c3.get("x")
+# order: x → z → y (LRU)
+
+c3.put("w", 40)
+# y should be evicted (was LRU after x was promoted)
+
+assert_none("y evicted after x was promoted",   c3.get("y"))
+assert_eq("x still present after promotion",    c3.get("x"), 10)
+assert_eq("z still present",                    c3.get("z"), 30)
+assert_eq("w inserted successfully",            c3.get("w"), 40)
+
+
+print("─── Update existing key ─────────────────────────────────────────────────")
+
+var c4 = lru_cache.lru_cache[3]
+c4.put("a", 1)
+c4.put("b", 2)
+c4.put("a", 99)   # update value for existing key
+
+assert_eq("updated value is returned",  c4.get("a"), 99)
+assert_eq("size unchanged after update", c4.size_of(), 2)
+
+# After update, "a" should be MRU; "b" is LRU
+c4.put("c", 3)
+c4.put("d", 4)
+# With capacity 3: c4 had a(MRU) and b. Adding c → size=3. Adding d evicts b (LRU).
+
+assert_none("b was evicted (was LRU)",  c4.get("b"))
+assert_eq("a survives (was MRU)",       c4.get("a"), 99)
+
+
+print("─── MRU→LRU order tracking ──────────────────────────────────────────────")
+
+var c5 = lru_cache.lru_cache[4]
+c5.put("p", 1)
+c5.put("q", 2)
+c5.put("r", 3)
+c5.put("s", 4)
+# order: s → r → q → p
+
+var ord1 = c5.order()
+assert_eq("MRU is s",          ord1(0), "s")
+assert_eq("second is r",       ord1(1), "r")
+assert_eq("third is q",        ord1(2), "q")
+assert_eq("LRU is p",          ord1(3), "p")
+
+# Access q — it moves to front
+c5.get("q")
+# order: q → s → r → p
+
+var ord2 = c5.order()
+assert_eq("after get(q): MRU is q",   ord2(0), "q")
+assert_eq("after get(q): second is s", ord2(1), "s")
+assert_eq("after get(q): LRU is p",   ord2(3), "p")
+
+
+print("─── Capacity 1 edge case ────────────────────────────────────────────────")
+
+var c6 = lru_cache.lru_cache[1]
+c6.put("only", 42)
+assert_eq("capacity-1 get",     c6.get("only"), 42)
+c6.put("new", 99)
+assert_none("capacity-1 old key evicted",    c6.get("only"))
+assert_eq("capacity-1 new key present",      c6.get("new"), 99)
+assert_eq("capacity-1 size is 1",            c6.size_of(), 1)
+
+
+print("─── Repeated access to same key (stress) ────────────────────────────────")
+
+var c7 = lru_cache.lru_cache[2]
+c7.put("m", 1)
+c7.put("n", 2)
+
+# Repeatedly access "m" — "n" should always be LRU and get evicted
+(0:5) = i{
+    c7.get("m")
+}
+c7.put("o", 3)
+
+assert_none("n evicted after m accessed repeatedly",  c7.get("n"))
+assert_eq("m still alive",  c7.get("m"), 1)
+assert_eq("o inserted",     c7.get("o"), 3)
+
+
+print("─── peek does not affect order ──────────────────────────────────────────")
+
+var c8 = lru_cache.lru_cache[3]
+c8.put("a", 1)
+c8.put("b", 2)
+c8.put("c", 3)
+# order: c(MRU) → b → a(LRU)
+
+c8.peek("a")   # peek should NOT promote "a"
+
+var ord3 = c8.order()
+assert_eq("peek: a stays LRU",   ord3(2), "a")
+assert_eq("peek: c stays MRU",   ord3(0), "c")
+
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════")
