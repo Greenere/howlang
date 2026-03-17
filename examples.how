@@ -1,0 +1,195 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Howlang examples — showcasing the full language
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. Primitives & Variables ────────────────────────────────────────────────
+var name  = "Alice"
+var age   = 30
+var happy = true
+var empty = none
+
+print("--- Primitives ---")
+print(name)
+print(age)
+print(happy)
+print(empty)
+
+
+# ── 2. Collections ───────────────────────────────────────────────────────────
+print("--- Collections ---")
+var scores = {95, 87, 72, 100, 60}
+print(scores(0))           # 95
+print(len(scores))         # 5
+
+var person = {
+    "name": "Bob",
+    "age": 25
+}
+print(person("name"))      # Bob
+
+
+# ── 3. Branching functions (if-else analog) ───────────────────────────────────
+print("--- Branching ---")
+
+var sign = (n){
+    n > 0 :: "positive",
+    n < 0 :: "negative",
+    :: "zero"
+}
+print(sign(42))    # positive
+print(sign(-7))    # negative
+print(sign(0))     # zero
+
+
+# ── 4. Recursion ─────────────────────────────────────────────────────────────
+print("--- Recursion ---")
+
+var factorial = (n){
+    n <= 1 :: 1,
+    :: n * factorial(n - 1)
+}
+print(factorial(5))   # 120
+print(factorial(10))  # 3628800
+
+var fib = (n){
+    n <= 1 :: n,
+    :: fib(n - 1) + fib(n - 2)
+}
+print(fib(10))   # 55
+
+
+# ── 5. List operations via recursion ─────────────────────────────────────────
+print("--- List ops ---")
+
+var sum = (nums){
+    len(nums) == 1 :: nums(0),
+    :: nums(0) + sum(nums(1:))
+}
+
+var product = (nums){
+    len(nums) == 1 :: nums(0),
+    :: nums(0) * product(nums(1:))
+}
+
+var nums = {1, 2, 3, 4, 5}
+print(sum(nums))      # 15
+print(product(nums))  # 120
+
+
+# ── 6. Unbounded loop ────────────────────────────────────────────────────────
+print("--- Loop ---")
+
+var counter = 1
+var result = (:){
+    counter > 5 :: counter,
+    counter += 1
+}()
+print(result)   # 6
+
+# FizzBuzz using loop
+var i = 1
+(:){
+    i > 20 :: none,
+    i % 15 == 0: {
+        print("FizzBuzz"),
+        i += 1
+    },
+    i % 3 == 0: {
+        print("Fizz"),
+        i += 1
+    },
+    i % 5 == 0: {
+        print("Buzz"),
+        i += 1
+    },
+    i % 15 != 0 and i % 3 != 0 and i % 5 != 0: {
+        print(i),
+        i += 1
+    }
+}()
+
+
+# ── 7. Classes ───────────────────────────────────────────────────────────────
+print("--- Classes ---")
+
+var animal = [species, sound]{
+    "species": species,
+    "sound":   sound,
+    "speak": (){
+        :: print(species + " says " + sound)
+    },
+    "describe": (){
+        :: print("I am a " + species)
+    }
+}
+
+var dog = animal["dog", "woof"]
+var cat = animal["cat", "meow"]
+dog.speak()      # dog says woof
+cat.speak()      # cat says meow
+dog.describe()   # I am a dog
+
+
+# ── 8. Higher-order functions ────────────────────────────────────────────────
+print("--- Higher-order ---")
+
+# map: apply a function to each element
+var map_list = (lst, f){
+    var i = 0,
+    var acc = list(),
+    :: (:){
+        i >= len(lst) :: acc,
+        push(acc, f(lst(i))),
+        i += 1
+    }()
+}
+
+var double = (x){ :: x * 2 }
+var square = (x){ :: x * x }
+
+var nums2 = {1, 2, 3, 4, 5}
+var doubled = map_list(nums2, double)
+var squared = map_list(nums2, square)
+
+var j = 0
+(:){
+    j >= len(doubled) :: none,
+    print(doubled(j)),
+    j += 1
+}()
+
+j = 0
+(:){
+    j >= len(squared) :: none,
+    print(squared(j)),
+    j += 1
+}()
+
+
+# ── 9. Closures ──────────────────────────────────────────────────────────────
+print("--- Closures ---")
+
+var make_adder = (n){
+    :: (x){ :: x + n }
+}
+var add5  = make_adder(5)
+var add10 = make_adder(10)
+print(add5(3))    # 8
+print(add10(3))   # 13
+
+
+# ── 10. String operations ────────────────────────────────────────────────────
+print("--- Strings ---")
+
+var greet = (name2, greeting){
+    :: greeting + ", " + name2 + "!"
+}
+print(greet("World", "Hello"))     # Hello, World!
+print(greet("Howlang", "Welcome")) # Welcome, Howlang!
+
+var repeat_str = (s, n){
+    n <= 0 :: "",
+    :: s + repeat_str(s, n - 1)
+}
+print(repeat_str("ha", 3))   # hahaha
