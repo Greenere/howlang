@@ -1,0 +1,200 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# graph.how  —  Weighted directed graph + Dijkstra shortest-path
+#
+# Classes exported:
+#   graph[]          — weighted directed graph
+#   graph.add_node(name)
+#   graph.add_edge(from, to, weight)
+#   graph.neighbors(node) → list of {to, weight} edge maps
+#   graph.has_node(name)  → bool
+#   graph.node_list()     → list of node names
+#
+#   shortest_path(g, src, dst)
+#     → none if no path exists
+#     → {dist: number, path: list_of_node_names} otherwise
+# ─────────────────────────────────────────────────────────────────────────────
+
+var INF = 999999999
+
+
+# ── Min-heap priority queue ───────────────────────────────────────────────────
+# Each element is a map {pri, val} where pri is the sort key.
+# Backed by a list; indices are 1-based (index 0 unused) for clean parent/child math.
+
+var _pq_parent = (i){ :: floor(i / 2) }
+var _pq_left   = (i){ :: i * 2 }
+var _pq_right  = (i){ :: i * 2 + 1 }
+
+var _pq_swap = (heap, i, j){
+    var tmp = heap(i),
+    set_key(heap, i, heap(j)),
+    set_key(heap, j, tmp)
+}
+
+var _pq_sift_up = (heap, i){
+    (:)={
+        i <= 1: break,
+        var p = _pq_parent(i),
+        heap(p).pri <= heap(i).pri: break,
+        _pq_swap(heap, p, i),
+        i = p
+    }
+}
+
+var _pq_sift_down = (heap, i, sz){
+    (:)={
+        var l = _pq_left(i),
+        var r = _pq_right(i),
+        var smallest = i,
+        l <= sz and heap(l).pri < heap(smallest).pri: smallest = l,
+        r <= sz and heap(r).pri < heap(smallest).pri: smallest = r,
+        smallest == i: break,
+        _pq_swap(heap, i, smallest),
+        i = smallest
+    }
+}
+
+var pq = []{
+    heap: list(),   # 1-based; slot 0 is a dummy placeholder
+    size: 0,
+
+    _init: (){
+        push(heap, none)   # occupy index 0 as dummy
+    },
+
+    push_pq: (pri, val){
+        push(heap, {"pri": pri, "val": val}),
+        size = size + 1,
+        _pq_sift_up(heap, size)
+    },
+
+    pop_pq: (){
+        size == 0 :: none,
+        var top = heap(1),
+        set_key(heap, 1, heap(size)),
+        pop(heap),
+        size = size - 1,
+        size > 0: _pq_sift_down(heap, 1, size),
+        :: top
+    },
+
+    is_empty: (){
+        :: size == 0
+    }
+}
+
+
+# ── Graph ─────────────────────────────────────────────────────────────────────
+
+var graph = []{
+    adj:   map(),   # node_name → list of {to, weight}
+    nodes: list(),  # ordered list of node names
+
+    add_node: (name){
+        has_key(adj, name) == false: {
+            set_key(adj, name, list()),
+            push(nodes, name)
+        }
+    },
+
+    add_edge: (from_node, to_node, weight){
+        # Auto-create nodes if they don't exist yet
+        add_node(from_node),
+        add_node(to_node),
+        push(get_key(adj, from_node), {"to": to_node, "weight": weight})
+    },
+
+    neighbors: (name){
+        has_key(adj, name) == false :: list(),
+        :: get_key(adj, name)
+    },
+
+    has_node: (name){
+        :: has_key(adj, name)
+    },
+
+    node_list: (){
+        :: nodes
+    }
+}
+
+
+# ── Dijkstra ──────────────────────────────────────────────────────────────────
+
+var shortest_path = (g, src, dst){
+    g.has_node(src) == false :: none,
+    g.has_node(dst) == false :: none,
+
+    # Initialise dist and prev maps
+    var dist = map(),
+    var prev = map(),
+    var ns   = g.node_list(),
+    var idx  = 0,
+    (0:len(ns)) = idx{
+        set_key(dist, ns(idx), INF),
+        set_key(prev, ns(idx), none)
+    },
+    set_key(dist, src, 0),
+
+    # Priority queue: {pri=distance, val=node_name}
+    var q = pq[],
+    q._init(),
+    q.push_pq(0, src),
+
+    # Visited set
+    var visited = map(),
+
+    # Main relaxation loop
+    (:)={
+        q.is_empty() :: none,   # exhausted — break
+
+        var item = q.pop_pq(),
+        var u    = item.val,
+        var d_u  = item.pri,
+
+        # Skip stale entries (already settled with a shorter path)
+        has_key(visited, u): {
+            # continue — nothing to do
+        },
+        has_key(visited, u) == false: {
+            set_key(visited, u, true),
+
+            # Relax edges
+            var edges = g.neighbors(u),
+            var ei    = 0,
+            (0:len(edges)) = ei{
+                var e      = edges(ei),
+                var v      = e.to,
+                var new_d  = d_u + e.weight,
+                new_d < get_key(dist, v): {
+                    set_key(dist, v, new_d),
+                    set_key(prev, v, u),
+                    q.push_pq(new_d, v)
+                }
+            }
+        }
+    },
+
+    # No path found
+    get_key(dist, dst) == INF :: none,
+
+    # Reconstruct path by walking prev backwards
+    var path  = list(),
+    var cur   = dst,
+    (:)={
+        cur == none: break,
+        push(path, cur),
+        cur = get_key(prev, cur)
+    },
+
+    # Reverse the path list
+    var reversed = list(),
+    var pi = len(path) - 1,
+    (:)={
+        pi < 0: break,
+        push(reversed, path(pi)),
+        pi = pi - 1
+    },
+
+    :: {"dist": get_key(dist, dst), "path": reversed}
+}

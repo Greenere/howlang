@@ -319,9 +319,10 @@ class Interpreter:
             return min(items, key=lambda v: v if isinstance(v, (int,float)) else 0)
 
         def _has_key(m, k):
-            if isinstance(m, HowMap):   return k in m.items
+            if isinstance(m, HowMap):      return k in m.items
             if isinstance(m, HowInstance): return k in m.fields
-            raise HowError("has_key() requires a map or instance")
+            if isinstance(m, HowList):     return 0 <= int(k) < len(m.items)
+            raise HowError("has_key() requires a map, instance, or list")
 
         def _set_key(m, k, v):
             if isinstance(m, HowMap):
@@ -330,7 +331,13 @@ class Interpreter:
             if isinstance(m, HowInstance):
                 m.fields[k] = v
                 return v
-            raise HowError("set_key() requires a map or instance")
+            if isinstance(m, HowList):
+                i = int(k)
+                if i < 0 or i >= len(m.items):
+                    raise HowError(f"List index {i} out of range (len={len(m.items)})")
+                m.items[i] = v
+                return v
+            raise HowError("set_key() requires a map, instance, or list")
 
         def _del_key(m, k):
             if isinstance(m, HowMap):
@@ -346,7 +353,12 @@ class Interpreter:
                 return m.items.get(k, None)
             if isinstance(m, HowInstance):
                 return m.fields.get(k, None)
-            raise HowError("get_key() requires a map or instance")
+            if isinstance(m, HowList):
+                i = int(k)
+                if 0 <= i < len(m.items):
+                    return m.items[i]
+                return None
+            raise HowError("get_key() requires a map, instance, or list")
 
         builtins = {
             "print": _print, "len": _len, "range": _range,
