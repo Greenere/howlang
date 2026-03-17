@@ -1,0 +1,52 @@
+{
+  "name": "howlang-lint",
+  "displayName": "Howlang Lint",
+  "description": "Syntax highlighting and lightweight lint diagnostics for Howlang files.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:howlang"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "howlang",
+        "aliases": ["Howlang", "howlang"],
+        "extensions": [".how"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "howlang",
+        "scopeName": "source.howlang",
+        "path": "./syntaxes/howlang.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[howlang]": {
+        "editor.wordSeparators": "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?"
+      }
+    },
+    "commands": [
+      {
+        "command": "howlangLint.run",
+        "title": "Howlang: Run Lint"
+      }
+    ]
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.2"
+  }
+}
