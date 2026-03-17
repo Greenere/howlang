@@ -206,10 +206,6 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
 | `(a:b) = i { ... }` | For-range loop; `::` in body is post-loop return value |
 
-### `sample.how` — known bugs in that file
-Line 25: `p.geet(...)` is a typo (should be `p.greet`), and there is an extra `)`.  
-The interpreter reports these clearly with a source pointer.
-
 ---
 
 ## File Structure
