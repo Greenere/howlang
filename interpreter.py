@@ -24,6 +24,10 @@ class HowBreak(Exception):
     """Raised by 'break' in a (:)= loop."""
     pass
 
+class HowQuit(Exception):
+    """Raised by quit() — exits the REPL."""
+    pass
+
 class HowError(Exception):
     pass
 
@@ -360,6 +364,9 @@ class Interpreter:
                 return None
             raise HowError("get_key() requires a map, instance, or list")
 
+        def _quit():
+            raise HowQuit()
+
         builtins = {
             "print": _print, "len": _len, "range": _range,
             "str": _str, "num": _num, "bool": _bool_fn, "type": _type,
@@ -369,6 +376,7 @@ class Interpreter:
             "sqrt": _sqrt, "max": _max_fn, "min": _min_fn,
             "has_key": _has_key, "set_key": _set_key,
             "del_key": _del_key, "get_key": _get_key,
+            "quit": _quit,
         }
         for name, fn in builtins.items():
             g.set(name, fn)
@@ -674,27 +682,51 @@ class Interpreter:
             self.eval(body, env)
 
     def run_loop(self, fn: HowFunction) -> Any:
-        """Run unbounded (:) or (:)= loop."""
+        """
+        Run unbounded (:) or (:)= loop.
+
+        Branch firing rules per iteration:
+          - VarDecl branches: always executed (local declarations)
+          - Unconditional side-effect branches (no condition): always executed
+          - Conditional branches (has condition): first matching one fires and
+            skips all remaining conditional branches in this iteration
+          - :: return branches: return immediately (unconditional or first match)
+          - break: exits the loop immediately, skipping remaining branches
+        """
         local = Environment(fn.closure)
         while True:
+            conditional_fired = False
             for branch in fn.branches:
+                # Always execute local var declarations
                 if isinstance(branch.body, VarDecl):
                     val = self.eval(branch.body.value, local)
                     local.set(branch.body.name, val)
                     continue
 
                 if branch.condition is not None:
+                    # Conditional branch: skip if another conditional already fired
+                    if conditional_fired:
+                        continue
                     if not how_truthy(self.eval(branch.condition, local)):
                         continue
-
-                if branch.is_return:
-                    body_val = self.eval(branch.body, local)
-                    return body_val
+                    # This condition matched
+                    if branch.is_return:
+                        return self.eval(branch.body, local)
+                    else:
+                        try:
+                            self.exec_branch_body(branch.body, local)
+                        except HowBreak:
+                            return None
+                    conditional_fired = True  # block remaining conditionals
                 else:
-                    try:
-                        self.exec_branch_body(branch.body, local)
-                    except HowBreak:
-                        return None
+                    # Unconditional branch: always runs
+                    if branch.is_return:
+                        return self.eval(branch.body, local)
+                    else:
+                        try:
+                            self.exec_branch_body(branch.body, local)
+                        except HowBreak:
+                            return None
 
     def run_for_loop(self, node: ForLoop, env: Environment) -> Any:
         """

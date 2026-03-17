@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from lexer import Lexer, LexError
 from parser import Parser, ParseError
-from interpreter import Interpreter, HowError, HowReturn
+from interpreter import Interpreter, HowError, HowReturn, HowQuit
 
 def run_source(source: str, interp: Interpreter, filename: str = "<input>") -> None:
     lines = source.splitlines()
@@ -42,6 +42,8 @@ def run_source(source: str, interp: Interpreter, filename: str = "<input>") -> N
             show_context(int(m.group(1)), int(m.group(2)))
     except HowReturn:
         pass   # top-level :: — ignore
+    except HowQuit:
+        raise   # let the REPL catch it
     except HowError as e:
         print(f"\033[31m[RuntimeError] {e}\033[0m", file=sys.stderr)
     except RecursionError:
@@ -49,7 +51,7 @@ def run_source(source: str, interp: Interpreter, filename: str = "<input>") -> N
 
 def repl():
     interp = Interpreter()
-    print("Howlang 0.1  |  type 'exit' or Ctrl+D to quit")
+    print("Howlang 0.1  |  type quit() or Ctrl+D to exit")
     buf = []
     while True:
         try:
@@ -74,7 +76,11 @@ def repl():
         if stripped.endswith("{") or stripped.endswith(","):
             continue
 
-        run_source(source, interp)
+        try:
+            run_source(source, interp)
+        except HowQuit:
+            print()
+            break
         buf = []
 
 def run_file(path: str):
