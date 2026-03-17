@@ -22,4 +22,4 @@ var p = person["Green", 23]
 fibo(a)
 
 print(fibo(3))
-print(p.name, p.geet("Good Morning")))
+print(p.name, p.greet("Good Morning")))
