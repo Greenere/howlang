@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# brainfuck.how  —  A Brainfuck interpreter written in Howlang
+#
+# Brainfuck is itself Turing complete, so implementing it proves Howlang is too.
+#
+# Brainfuck commands:
+#   >   move data pointer right
+#   <   move data pointer left
+#   +   increment cell at pointer
+#   -   decrement cell at pointer
+#   .   output ASCII char at pointer
+#   ,   read one ASCII char into cell (not implemented here — no stdin in batch)
+#   [   jump past matching ] if cell == 0
+#   ]   jump back to matching [ if cell != 0
+#
+# Exported:
+#   bf_run(source)  →  output string
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Convert a number to its ASCII character (covers printable range 32-126)
+var _chr = (n){
+    n == 10  :: "\n",
+    n == 32  :: " ",  n == 33  :: "!",  n == 34  :: "\"", n == 35  :: "#",
+    n == 36  :: "$",  n == 37  :: "%",  n == 38  :: "&",  n == 39  :: "'",
+    n == 40  :: "(",  n == 41  :: ")",  n == 42  :: "*",  n == 43  :: "+",
+    n == 44  :: ",",  n == 45  :: "-",  n == 46  :: ".",  n == 47  :: "/",
+    n == 48  :: "0",  n == 49  :: "1",  n == 50  :: "2",  n == 51  :: "3",
+    n == 52  :: "4",  n == 53  :: "5",  n == 54  :: "6",  n == 55  :: "7",
+    n == 56  :: "8",  n == 57  :: "9",  n == 58  :: ":",  n == 59  :: ";",
+    n == 60  :: "<",  n == 61  :: "=",  n == 62  :: ">",  n == 63  :: "?",
+    n == 64  :: "@",
+    n == 65  :: "A",  n == 66  :: "B",  n == 67  :: "C",  n == 68  :: "D",
+    n == 69  :: "E",  n == 70  :: "F",  n == 71  :: "G",  n == 72  :: "H",
+    n == 73  :: "I",  n == 74  :: "J",  n == 75  :: "K",  n == 76  :: "L",
+    n == 77  :: "M",  n == 78  :: "N",  n == 79  :: "O",  n == 80  :: "P",
+    n == 81  :: "Q",  n == 82  :: "R",  n == 83  :: "S",  n == 84  :: "T",
+    n == 85  :: "U",  n == 86  :: "V",  n == 87  :: "W",  n == 88  :: "X",
+    n == 89  :: "Y",  n == 90  :: "Z",
+    n == 91  :: "[",  n == 92  :: "\\", n == 93  :: "]",  n == 94  :: "^",
+    n == 95  :: "_",  n == 96  :: "`",
+    n == 97  :: "a",  n == 98  :: "b",  n == 99  :: "c",  n == 100 :: "d",
+    n == 101 :: "e",  n == 102 :: "f",  n == 103 :: "g",  n == 104 :: "h",
+    n == 105 :: "i",  n == 106 :: "j",  n == 107 :: "k",  n == 108 :: "l",
+    n == 109 :: "m",  n == 110 :: "n",  n == 111 :: "o",  n == 112 :: "p",
+    n == 113 :: "q",  n == 114 :: "r",  n == 115 :: "s",  n == 116 :: "t",
+    n == 117 :: "u",  n == 118 :: "v",  n == 119 :: "w",  n == 120 :: "x",
+    n == 121 :: "y",  n == 122 :: "z",
+    n == 123 :: "{",  n == 124 :: "|",  n == 125 :: "}",  n == 126 :: "~",
+    :: "?"
+}
+
+# Get character at position i in a string (returns single-char string)
+var _char_at = (s, i){ :: s(i:i+1) }
+
+# ── Build bracket jump table ──────────────────────────────────────────────────
+# For each [ store the matching ] position, and vice versa.
+# Returns a map: position → matching position.
+
+var _build_jumps = (prog){
+    var jumps  = map(),
+    var stack  = list(),
+    var i      = 0,
+    (0:len(prog)) = i{
+        var c = _char_at(prog, i),
+        c == "[": push(stack, i),
+        c == "]": {
+            len(stack) > 0: {
+                var open = pop(stack),
+                set_key(jumps, open, i),
+                set_key(jumps, i,    open)
+            }
+        }
+    },
+    :: jumps
+}
+
+# ── Main interpreter ──────────────────────────────────────────────────────────
+
+var bf_run = (source){
+    var prog   = source,
+    var plen   = len(prog),
+    var jumps  = _build_jumps(prog),
+
+    # Tape: 30000 cells initialised to 0 (we grow lazily via a map)
+    var tape   = map(),
+    var dp     = 0,    # data pointer
+    var ip     = 0,    # instruction pointer
+    var output = "",
+
+    (:)={
+        ip >= plen: break,
+
+        var cmd = _char_at(prog, ip),
+
+        cmd == ">": { dp = dp + 1 },
+        cmd == "<": { dp = dp - 1 },
+        cmd == "+": {
+            var cur = get_key(tape, dp),
+            cur == none: set_key(tape, dp, 1),
+            cur != none: set_key(tape, dp, (cur + 1) % 256)
+        },
+        cmd == "-": {
+            var cur = get_key(tape, dp),
+            cur == none: set_key(tape, dp, 255),
+            cur != none: set_key(tape, dp, (cur - 1 + 256) % 256)
+        },
+        cmd == ".": {
+            var cell = get_key(tape, dp),
+            cell == none: output = output + _chr(0),
+            cell != none: output = output + _chr(cell)
+        },
+        cmd == "[": {
+            var cell = get_key(tape, dp),
+            cell == none: ip = get_key(jumps, ip),
+            cell == 0:    ip = get_key(jumps, ip)
+        },
+        cmd == "]": {
+            var cell = get_key(tape, dp),
+            cell != none and cell != 0: ip = get_key(jumps, ip)
+        },
+
+        ip = ip + 1
+    },
+
+    :: output
+}
