@@ -3,7 +3,7 @@
   "displayName": "Howlang Lint",
   "description": "Syntax highlighting and lightweight lint diagnostics for Howlang files.",
   "version": "0.1.0",
-  "publisher": "local",
+  "publisher": "Haoyang Li",
   "engines": {
     "vscode": "^1.85.0"
   },
