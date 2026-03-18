@@ -1,0 +1,234 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# how_lexer.how  —  Lexer for the Howlang meta-interpreter
+#
+# Tokenises a Howlang source string into a list of token maps:
+#   { "t": type_string, "v": value, "ln": line }
+#
+# Token types (strings):
+#   "NUM" "STR" "BOOL" "NONE" "IDENT"
+#   "VAR"
+#   "LPAREN" "RPAREN" "LBRACE" "RBRACE" "LBRACKET" "RBRACKET"
+#   "COMMA" "DOT" "COLON" "DCOLON"
+#   "PLUS" "MINUS" "STAR" "SLASH" "PERCENT"
+#   "EQ" "PLUSEQ" "MINUSEQ" "STAREQ" "SLASHEQ"
+#   "EQEQ" "NEQ" "LT" "GT" "LTE" "GTE"
+#   "AND" "OR" "NOT"
+#   "BREAK"
+#   "EOF"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Character predicates ──────────────────────────────────────────────────────
+
+var is_digit = (c){
+    c >= "0" and c <= "9" :: true,
+    :: false
+}
+
+var is_alpha = (c){
+    c >= "a" and c <= "z" :: true,
+    c >= "A" and c <= "Z" :: true,
+    c == "_"              :: true,
+    :: false
+}
+
+var is_alnum = (c){
+    is_alpha(c) :: true,
+    is_digit(c) :: true,
+    :: false
+}
+
+var is_space = (c){
+    c == " "  :: true,
+    c == "\n" :: true,
+    c == "\t" :: true,
+    c == "\r" :: true,
+    :: false
+}
+
+# ── Token constructor ─────────────────────────────────────────────────────────
+
+var mktok = (t, v, ln){ :: {"t": t, "v": v, "ln": ln} }
+
+# ── Keyword table ─────────────────────────────────────────────────────────────
+
+var keyword_type = (w){
+    w == "var"   :: "VAR",
+    w == "true"  :: "BOOL",
+    w == "false" :: "BOOL",
+    w == "none"  :: "NONE",
+    w == "and"   :: "AND",
+    w == "or"    :: "OR",
+    w == "not"   :: "NOT",
+    w == "break" :: "BREAK",
+    :: "IDENT"
+}
+
+var keyword_val = (w){
+    w == "true"  :: true,
+    w == "false" :: false,
+    w == "none"  :: none,
+    :: w
+}
+
+# ── Number parser ─────────────────────────────────────────────────────────────
+
+var parse_num_str = (src, pos){
+    # Read digits, optional decimal point + digits
+    # Returns {val: number, pos: new_pos}
+    var s   = "",
+    var p   = pos,
+    var slen = len(src),
+    (:)={
+        p >= slen: break,
+        is_digit(src(p:p+1)) == false: break,
+        s = s + src(p:p+1),
+        p = p + 1
+    },
+    p < slen and src(p:p+1) == "." and p+1 < slen and is_digit(src(p+1:p+2)): {
+        s = s + ".",
+        p = p + 1,
+        (:)={
+            p >= slen: break,
+            is_digit(src(p:p+1)) == false: break,
+            s = s + src(p:p+1),
+            p = p + 1
+        }
+    },
+    :: {"val": num(s), "pos": p}
+}
+
+# ── String parser ─────────────────────────────────────────────────────────────
+
+var parse_string = (src, pos){
+    # pos points at opening quote; returns {val: string, pos: after_close}
+    var quote = src(pos:pos+1),
+    var p = pos + 1,
+    var s = "",
+    var slen = len(src),
+    (:)={
+        p >= slen: break,
+        src(p:p+1) == "\\": {
+            p >= slen - 1: break,
+            var esc = src(p+1:p+2),
+            esc == "n":  { s = s + "\n", p = p + 2 },
+            esc == "t":  { s = s + "\t", p = p + 2 },
+            esc == "\\": { s = s + "\\", p = p + 2 },
+            esc == "\"": { s = s + "\"", p = p + 2 },
+            esc == "'":  { s = s + "'",  p = p + 2 },
+            esc != "n" and esc != "t" and esc != "\\" and esc != "\"" and esc != "'": {
+                s = s + esc, p = p + 2
+            }
+        },
+        src(p:p+1) != "\\" and src(p:p+1) == quote: {
+            p = p + 1,
+            break
+        },
+        src(p:p+1) != "\\" and src(p:p+1) != quote: {
+            s = s + src(p:p+1),
+            p = p + 1
+        }
+    },
+    :: {"val": s, "pos": p}
+}
+
+# ── Main tokeniser ────────────────────────────────────────────────────────────
+
+var tokenise = (src){
+    var tokens = list(),
+    var pos    = 0,
+    var line   = 1,
+    var slen   = len(src),
+
+    (:)={
+        pos >= slen: break,
+        var c = src(pos:pos+1),
+
+        # Newline — track line numbers
+        c == "\n": {
+            line = line + 1,
+            pos  = pos + 1
+        },
+
+        # Whitespace
+        is_space(c) and c != "\n": { pos = pos + 1 },
+
+        # Line comment
+        c == "#": {
+            (:)={
+                pos >= slen: break,
+                src(pos:pos+1) == "\n": break,
+                pos = pos + 1
+            }
+        },
+
+        # Semicolons — skip
+        c == ";": { pos = pos + 1 },
+
+        # Numbers
+        is_digit(c): {
+            var r = parse_num_str(src, pos),
+            push(tokens, mktok("NUM", r("val"), line)),
+            pos = r("pos")
+        },
+
+        # Strings
+        c == "\"" or c == "'": {
+            var r = parse_string(src, pos),
+            push(tokens, mktok("STR", r("val"), line)),
+            pos = r("pos")
+        },
+
+        # Identifiers / keywords
+        is_alpha(c): {
+            var word = "",
+            (:)={
+                pos >= slen: break,
+                is_alnum(src(pos:pos+1)) == false: break,
+                word = word + src(pos:pos+1),
+                pos  = pos + 1
+            },
+            var tt = keyword_type(word),
+            var tv = keyword_val(word),
+            push(tokens, mktok(tt, tv, line))
+        },
+
+        # Two-char and one-char operators
+        # peek_nc(src, pos, slen): next char or ""
+        c == ":" or c == "=" or c == "!" or c == "<" or c == ">" or
+        c == "+" or c == "-" or c == "*" or c == "/": {
+            var nc = "",
+            pos + 1 < slen: nc = src(pos+1:pos+2),
+            var two = c + nc,
+            two == "::": { push(tokens, mktok("DCOLON",  "::", line)), pos = pos + 2 },
+            two == "==": { push(tokens, mktok("EQEQ",    "==", line)), pos = pos + 2 },
+            two == "!=": { push(tokens, mktok("NEQ",     "!=", line)), pos = pos + 2 },
+            two == "<=": { push(tokens, mktok("LTE",     "<=", line)), pos = pos + 2 },
+            two == ">=": { push(tokens, mktok("GTE",     ">=", line)), pos = pos + 2 },
+            two == "+=": { push(tokens, mktok("PLUSEQ",  "+=", line)), pos = pos + 2 },
+            two == "-=": { push(tokens, mktok("MINUSEQ", "-=", line)), pos = pos + 2 },
+            two == "*=": { push(tokens, mktok("STAREQ",  "*=", line)), pos = pos + 2 },
+            two == "/=": { push(tokens, mktok("SLASHEQ", "/=", line)), pos = pos + 2 },
+            two != "::" and c == ":": { push(tokens, mktok("COLON",  ":",  line)), pos = pos + 1 },
+            two != "==" and c == "=": { push(tokens, mktok("EQ",     "=",  line)), pos = pos + 1 },
+            two != "!=" and c == "!": { push(tokens, mktok("NOT",    "!",  line)), pos = pos + 1 },
+            two != "<=" and c == "<": { push(tokens, mktok("LT",     "<",  line)), pos = pos + 1 },
+            two != ">=" and c == ">": { push(tokens, mktok("GT",     ">",  line)), pos = pos + 1 },
+            two != "+=" and c == "+": { push(tokens, mktok("PLUS",   "+",  line)), pos = pos + 1 },
+            two != "-=" and c == "-": { push(tokens, mktok("MINUS",  "-",  line)), pos = pos + 1 },
+            two != "*=" and c == "*": { push(tokens, mktok("STAR",   "*",  line)), pos = pos + 1 },
+            two != "/=" and c == "/": { push(tokens, mktok("SLASH",  "/",  line)), pos = pos + 1 }
+        },
+        c == "%": { push(tokens, mktok("PERCENT", "%", line)), pos = pos + 1 },
+        c == "(": { push(tokens, mktok("LPAREN",   "(", line)), pos = pos + 1 },
+        c == ")": { push(tokens, mktok("RPAREN",   ")", line)), pos = pos + 1 },
+        c == "{": { push(tokens, mktok("LBRACE",   "{", line)), pos = pos + 1 },
+        c == "}": { push(tokens, mktok("RBRACE",   "}", line)), pos = pos + 1 },
+        c == "[": { push(tokens, mktok("LBRACKET", "[", line)), pos = pos + 1 },
+        c == "]": { push(tokens, mktok("RBRACKET", "]", line)), pos = pos + 1 },
+        c == ",": { push(tokens, mktok("COMMA",    ",", line)), pos = pos + 1 },
+        c == ".": { push(tokens, mktok("DOT",      ".", line)), pos = pos + 1 }
+    },
+
+    push(tokens, mktok("EOF", none, line)),
+    :: tokens
+}

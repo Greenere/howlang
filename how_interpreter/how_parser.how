@@ -1,0 +1,589 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# how_parser.how  —  Recursive-descent parser for the Howlang meta-interpreter
+#
+# Takes a token list from how_lexer and produces an AST represented as maps.
+#
+# AST node tags:
+#   num(v)            str(v)         bool(v)      none_lit
+#   ident(name)       binop(op,l,r)  unary(op,e)
+#   assign(target,op,val)
+#   dot(obj,attr)     call(callee,args)   slice(col,start,stop)
+#   func(params,branches,is_loop)
+#   branch(cond,body,is_ret)
+#   var_decl(name,val)
+#   block(stmts)      prog(stmts)
+#   map_lit(items)    # items: list of {k,v}; k=none means list element
+#   break_node
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Parser state ──────────────────────────────────────────────────────────────
+# We pass a "state" map {tokens, pos} through every parse function.
+# Each parser returns {node: <ast>, st: <new_state>}
+
+var mk_st   = (tokens){ :: {"tokens": tokens, "pos": 0} }
+var st_peek = (st, off){
+    var i = st("pos") + off,
+    i >= len(st("tokens")): { :: st("tokens")(len(st("tokens")) - 1) },
+    :: st("tokens")(i)
+}
+var st_cur  = (st){ :: st_peek(st, 0) }
+var st_adv  = (st){ :: {"tokens": st("tokens"), "pos": st("pos") + 1} }
+var st_chk  = (st, t){ :: st_cur(st)("t") == t }
+var st_mat  = (st, t){
+    st_cur(st)("t") == t :: {"tok": st_cur(st), "st": st_adv(st)},
+    :: none
+}
+
+# ── AST node constructors ─────────────────────────────────────────────────────
+var nd = (tag, fields){
+    set_key(fields, "tag", tag),
+    :: fields
+}
+
+# ── Forward declarations for mutual recursion ─────────────────────────────────
+var p_expr      = none
+var p_assign    = none
+var p_or        = none
+var p_and       = none
+var p_not       = none
+var p_cmp       = none
+var p_add       = none
+var p_mul       = none
+var p_unary     = none
+var p_call      = none
+var p_atom      = none
+var p_func_body = none
+var p_branch    = none
+var p_block     = none
+var p_map_lit   = none
+var p_func_grp  = none
+
+# ── parse_expr → assign ───────────────────────────────────────────────────────
+p_expr = (st){
+    :: p_assign(st)
+}
+
+p_assign = (st){
+    var r  = p_or(st),
+    var left = r("node"),
+    var st2  = r("st"),
+    var cur  = st_cur(st2),
+    cur("t") == "EQ" or cur("t") == "PLUSEQ" or
+    cur("t") == "MINUSEQ" or cur("t") == "STAREQ" or cur("t") == "SLASHEQ": {
+        var op  = cur("v"),
+        var st3 = st_adv(st2),
+        var r2  = p_expr(st3),
+        :: {"node": nd("assign", {"target": left, "op": op, "val": r2("node")}), "st": r2("st")}
+    },
+    :: r
+}
+
+p_or = (st){
+    var r    = p_and(st),
+    var left = r("node"),
+    var st2  = r("st"),
+    var done = false,
+    (:)={
+        done: break,
+        st_cur(st2)("t") == "OR": {
+            var st3 = st_adv(st2),
+            var r2  = p_and(st3),
+            left = nd("binop", {"op": "or", "l": left, "r": r2("node")}),
+            st2  = r2("st")
+        },
+        st_cur(st2)("t") != "OR": { done = true }
+    },
+    :: {"node": left, "st": st2}
+}
+
+p_and = (st){
+    var r    = p_not(st),
+    var left = r("node"),
+    var st2  = r("st"),
+    var done = false,
+    (:)={
+        done: break,
+        st_cur(st2)("t") == "AND": {
+            var st3 = st_adv(st2),
+            var r2  = p_not(st3),
+            left = nd("binop", {"op": "and", "l": left, "r": r2("node")}),
+            st2  = r2("st")
+        },
+        st_cur(st2)("t") != "AND": { done = true }
+    },
+    :: {"node": left, "st": st2}
+}
+
+p_not = (st){
+    st_chk(st, "NOT"): {
+        var st2 = st_adv(st),
+        var r   = p_not(st2),
+        :: {"node": nd("unary", {"op": "not", "e": r("node")}), "st": r("st")}
+    },
+    :: p_cmp(st)
+}
+
+p_cmp = (st){
+    var r    = p_add(st),
+    var left = r("node"),
+    var st2  = r("st"),
+    var done = false,
+    (:)={
+        done: break,
+        var ct = st_cur(st2)("t"),
+        ct == "EQEQ" or ct == "NEQ" or ct == "LT" or
+        ct == "GT"   or ct == "LTE" or ct == "GTE": {
+            var op  = st_cur(st2)("v"),
+            var st3 = st_adv(st2),
+            var r2  = p_add(st3),
+            left = nd("binop", {"op": op, "l": left, "r": r2("node")}),
+            st2  = r2("st")
+        },
+        ct != "EQEQ" and ct != "NEQ" and ct != "LT" and
+        ct != "GT"   and ct != "LTE" and ct != "GTE": { done = true }
+    },
+    :: {"node": left, "st": st2}
+}
+
+p_add = (st){
+    var r    = p_mul(st),
+    var left = r("node"),
+    var st2  = r("st"),
+    var done = false,
+    (:)={
+        done: break,
+        st_cur(st2)("t") == "PLUS" or st_cur(st2)("t") == "MINUS": {
+            var op  = st_cur(st2)("v"),
+            var st3 = st_adv(st2),
+            var r2  = p_mul(st3),
+            left = nd("binop", {"op": op, "l": left, "r": r2("node")}),
+            st2  = r2("st")
+        },
+        st_cur(st2)("t") != "PLUS" and st_cur(st2)("t") != "MINUS": { done = true }
+    },
+    :: {"node": left, "st": st2}
+}
+
+p_mul = (st){
+    var r    = p_unary(st),
+    var left = r("node"),
+    var st2  = r("st"),
+    var done = false,
+    (:)={
+        done: break,
+        st_cur(st2)("t") == "STAR" or st_cur(st2)("t") == "SLASH" or st_cur(st2)("t") == "PERCENT": {
+            var op  = st_cur(st2)("v"),
+            var st3 = st_adv(st2),
+            var r2  = p_unary(st3),
+            left = nd("binop", {"op": op, "l": left, "r": r2("node")}),
+            st2  = r2("st")
+        },
+        st_cur(st2)("t") != "STAR" and st_cur(st2)("t") != "SLASH" and st_cur(st2)("t") != "PERCENT": { done = true }
+    },
+    :: {"node": left, "st": st2}
+}
+
+p_unary = (st){
+    st_chk(st, "MINUS"): {
+        var st2 = st_adv(st),
+        var r   = p_unary(st2),
+        :: {"node": nd("unary", {"op": "-", "e": r("node")}), "st": r("st")}
+    },
+    :: p_call(st)
+}
+
+# ── Call / dot / slice chaining ───────────────────────────────────────────────
+p_call = (st){
+    var r    = p_atom(st),
+    var node = r("node"),
+    var st2  = r("st"),
+    var done = false,
+    var last_line = st_cur(st)("ln"),
+    # After parsing a func/class literal, allow () on any line (for (){...}() pattern)
+    node != none and type(node) == "map" and has_key(node, "tag") and
+    (node("tag") == "func"): {
+        last_line = st_cur(st2)("ln")
+    },
+    (:)={
+        done: break,
+        var cur = st_cur(st2),
+        # Call or slice: ( on same line, OR callee is a func/loop literal
+        cur("t") == "LPAREN" and cur("ln") == last_line: {
+            var st3 = st_adv(st2),          # consume (
+            # Empty call: ()
+            st_cur(st3)("t") == "RPAREN": {
+                var st4 = st_adv(st3),
+                node = nd("call", {"callee": node, "args": list()}),
+                st2  = st4,
+                last_line = cur("ln")
+            },
+            st_cur(st3)("t") != "RPAREN": {
+            # Detect slice: start? : stop?
+            var start = none,
+            var has_start = false,
+            st_cur(st3)("t") != "COLON": {
+                var r2 = p_expr(st3),
+                start     = r2("node"),
+                has_start = true,
+                st3       = r2("st")
+            },
+            st_cur(st3)("t") == "COLON": {
+                # It's a slice
+                var st4 = st_adv(st3),      # consume :
+                var stop = none,
+                st_cur(st4)("t") != "RPAREN": {
+                    var r3 = p_expr(st4),
+                    stop = r3("node"),
+                    st4  = r3("st")
+                },
+                # consume )
+                var st5 = st_adv(st4),
+                node = nd("slice", {"col": node, "start": start, "stop": stop}),
+                st2  = st5,
+                last_line = cur("ln")
+            },
+            st_cur(st3)("t") != "COLON" and has_start: {
+                # Regular call — collect remaining args
+                var args = list(),
+                push(args, start),
+                var done2 = false,
+                (:)={
+                    done2: break,
+                    st_cur(st3)("t") == "COMMA": {
+                        st3 = st_adv(st3),
+                        st_cur(st3)("t") == "RPAREN": { done2 = true },
+                        st_cur(st3)("t") != "RPAREN": {
+                            var r2 = p_expr(st3),
+                            push(args, r2("node")),
+                            st3 = r2("st")
+                        }
+                    },
+                    st_cur(st3)("t") != "COMMA": { done2 = true }
+                },
+                # consume )
+                st3  = st_adv(st3),
+                node = nd("call", {"callee": node, "args": args}),
+                st2  = st3,
+                last_line = cur("ln")
+            },
+            st_cur(st3)("t") != "COLON" and has_start == false: {
+                # Empty call ()
+                var st4 = st_adv(st3),     # consume )
+                node = nd("call", {"callee": node, "args": list()}),
+                st2  = st4,
+                last_line = cur("ln")
+            }
+            }   # end st_cur(st3)("t") != "RPAREN" block
+        },
+        # Dot access
+        cur("t") == "DOT": {
+            var st3  = st_adv(st2),
+            var attr = st_cur(st3)("v"),
+            var st4  = st_adv(st3),
+            node = nd("dot", {"obj": node, "attr": attr}),
+            st2  = st4,
+            last_line = st_cur(st4)("ln")
+        },
+        cur("t") != "LPAREN" and cur("t") != "DOT": { done = true },
+        cur("t") == "LPAREN" and cur("ln") != last_line: { done = true }
+    },
+    :: {"node": node, "st": st2}
+}
+
+# ── Atom ──────────────────────────────────────────────────────────────────────
+p_atom = (st){
+    var cur = st_cur(st),
+
+    cur("t") == "NUM":  { :: {"node": nd("num",  {"v": cur("v")}), "st": st_adv(st)} },
+    cur("t") == "STR":  { :: {"node": nd("str",  {"v": cur("v")}), "st": st_adv(st)} },
+    cur("t") == "BOOL": { :: {"node": nd("bool", {"v": cur("v")}), "st": st_adv(st)} },
+    cur("t") == "NONE": { :: {"node": nd("none_lit", {}),           "st": st_adv(st)} },
+    cur("t") == "IDENT":{ :: {"node": nd("ident",{"name": cur("v")}), "st": st_adv(st)} },
+    cur("t") == "BREAK":{ :: {"node": nd("break_node", {}),          "st": st_adv(st)} },
+
+    # ( ... )  — function, loop, or grouped expr
+    cur("t") == "LPAREN": { :: p_func_grp(st) },
+
+    # { ... }  — map/list literal or branch-function
+    cur("t") == "LBRACE": { :: p_map_lit(st) },
+
+    :: {"node": nd("none_lit", {}), "st": st_adv(st)}   # fallback / error recovery
+}
+
+# ── Function / loop / group starting with ( ───────────────────────────────────
+p_func_grp = (st){
+    var st2 = st_adv(st),          # consume (
+    var result = none,
+
+    # (:) — unbounded loop
+    result == none and st_cur(st2)("t") == "COLON" and st_peek(st2,1)("t") == "RPAREN": {
+        var st3 = st_adv(st_adv(st2)),
+        var r   = p_func_body(st3),
+        result  = {"node": nd("func", {"params": list(), "branches": r("branches"), "is_loop": true}), "st": r("st")}
+    },
+
+    # () — empty params function
+    result == none and st_cur(st2)("t") == "RPAREN": {
+        var st3 = st_adv(st2),
+        st_cur(st3)("t") == "LBRACE": {
+            var r  = p_func_body(st3),
+            result = {"node": nd("func", {"params": list(), "branches": r("branches"), "is_loop": false}), "st": r("st")}
+        },
+        result == none: { result = {"node": nd("none_lit", {}), "st": st3} }
+    },
+
+    # (ident,...) { } — named-param function (lookahead, no try/except)
+    result == none and st_cur(st2)("t") == "IDENT": {
+        var look  = st2("pos"),
+        var toks2 = st2("tokens"),
+        var lpar  = list(),
+        var lfail = false,
+        var ldone = false,
+        (:)={
+            ldone: break,
+            look < len(toks2) and toks2(look)("t") == "IDENT": {
+                push(lpar, toks2(look)("v")),
+                look = look + 1,
+                look < len(toks2) and toks2(look)("t") == "COMMA": {
+                    look = look + 1
+                },
+                look >= len(toks2) or toks2(look)("t") != "IDENT" and toks2(look)("t") != "COMMA": {
+                    ldone = true
+                }
+            },
+            look >= len(toks2) or toks2(look)("t") != "IDENT": { ldone = true }
+        },
+        look < len(toks2) and toks2(look)("t") == "RPAREN" and
+        look + 1 < len(toks2) and toks2(look+1)("t") == "LBRACE": {
+            var st3 = {"tokens": toks2, "pos": look + 1},
+            var r   = p_func_body(st3),
+            result  = {"node": nd("func", {"params": lpar, "branches": r("branches"), "is_loop": false}), "st": r("st")}
+        },
+        # Not a function — grouped expression
+        result == none: {
+            var st_back = {"tokens": st2("tokens"), "pos": st2("pos")},
+            var r    = p_expr(st_back),
+            var st4  = st_adv(r("st")),
+            result   = {"node": r("node"), "st": st4}
+        }
+    },
+
+    # Grouped expression (no IDENT at start)
+    result == none: {
+        var r  = p_expr(st2),
+        var st3 = st_adv(r("st")),
+        result  = {"node": r("node"), "st": st3}
+    },
+
+    :: result
+}
+
+# ── Map / list / branch-function literal { ... } ──────────────────────────────
+p_map_lit = (st){
+    var st2 = st_adv(st),            # consume {
+
+    # Empty {}
+    st_cur(st2)("t") == "RBRACE": {
+        :: {"node": nd("map_lit", {"items": list()}), "st": st_adv(st2)}
+    },
+
+    # Starts with :: → branch function
+    st_cur(st2)("t") == "DCOLON": {
+        var branches = list(),
+        var done4 = false,
+        (:)={
+            done4: break,
+            st_cur(st2)("t") == "RBRACE" or st_cur(st2)("t") == "EOF": { done4 = true },
+            st_cur(st2)("t") != "RBRACE" and st_cur(st2)("t") != "EOF": {
+                var rb = p_branch(st2),
+                push(branches, rb("node")),
+                st2 = rb("st"),
+                st_cur(st2)("t") == "COMMA": { st2 = st_adv(st2) }
+            }
+        },
+        :: {"node": nd("func", {"params": list(), "branches": branches, "is_loop": false}), "st": st_adv(st2)}
+    },
+
+    # Parse first item
+    var r1 = p_expr(st2),
+    st2    = r1("st"),
+
+    # Map: key : value
+    st_cur(st2)("t") == "COLON": {
+        st2 = st_adv(st2),
+        var rv = p_expr(st2),
+        st2 = rv("st"),
+        var items = list(),
+        push(items, {"k": r1("node"), "v": rv("node")}),
+        var done5 = false,
+        (:)={
+            done5: break,
+            st_cur(st2)("t") == "COMMA": {
+                st2 = st_adv(st2),
+                st_cur(st2)("t") == "RBRACE": { done5 = true },
+                st_cur(st2)("t") != "RBRACE": {
+                    var rk = p_expr(st2), st2 = rk("st"),
+                    st2 = st_adv(st2),   # skip :
+                    var rv2 = p_expr(st2), st2 = rv2("st"),
+                    push(items, {"k": rk("node"), "v": rv2("node")})
+                }
+            },
+            st_cur(st2)("t") != "COMMA": { done5 = true }
+        },
+        :: {"node": nd("map_lit", {"items": items}), "st": st_adv(st2)}
+    },
+
+    # Branch function: cond :: body
+    st_cur(st2)("t") == "DCOLON": {
+        st2 = st_adv(st2),
+        var rbody = p_expr(st2), st2 = rbody("st"),
+        var branches = list(),
+        push(branches, nd("branch", {"cond": r1("node"), "body": rbody("node"), "is_ret": true})),
+        var done6 = false,
+        (:)={
+            done6: break,
+            st_cur(st2)("t") == "COMMA": {
+                st2 = st_adv(st2),
+                st_cur(st2)("t") == "RBRACE": { done6 = true },
+                st_cur(st2)("t") != "RBRACE": {
+                    var rb = p_branch(st2), st2 = rb("st"),
+                    push(branches, rb("node")),
+                    st_cur(st2)("t") == "COMMA": { st2 = st_adv(st2) }
+                }
+            },
+            st_cur(st2)("t") != "COMMA": { done6 = true }
+        },
+        :: {"node": nd("func", {"params": list(), "branches": branches, "is_loop": false}), "st": st_adv(st2)}
+    },
+
+    # List literal: { expr, expr, ... }
+    var items2 = list(),
+    push(items2, {"k": none, "v": r1("node")}),
+    var done7 = false,
+    (:)={
+        done7: break,
+        st_cur(st2)("t") == "COMMA": {
+            st2 = st_adv(st2),
+            st_cur(st2)("t") == "RBRACE": { done7 = true },
+            st_cur(st2)("t") != "RBRACE": {
+                var ri = p_expr(st2), st2 = ri("st"),
+                push(items2, {"k": none, "v": ri("node")})
+            }
+        },
+        st_cur(st2)("t") != "COMMA": { done7 = true }
+    },
+    :: {"node": nd("map_lit", {"items": items2}), "st": st_adv(st2)}
+}
+
+# ── Function body { branch, branch, ... } ────────────────────────────────────
+p_func_body = (st){
+    var st2     = st_adv(st),         # consume {
+    var branches = list(),
+    var done8   = false,
+    (:)={
+        done8: break,
+        st_cur(st2)("t") == "RBRACE" or st_cur(st2)("t") == "EOF": { done8 = true },
+        st_cur(st2)("t") != "RBRACE" and st_cur(st2)("t") != "EOF": {
+            var rb = p_branch(st2),
+            push(branches, rb("node")),
+            st2 = rb("st"),
+            st_cur(st2)("t") == "COMMA": { st2 = st_adv(st2) }
+        }
+    },
+    :: {"branches": branches, "st": st_adv(st2)}   # consume }
+}
+
+# ── Branch: cond :: expr | cond : body | :: expr | var_decl | expr ───────────
+p_branch = (st){
+    # var declaration
+    st_cur(st)("t") == "VAR": {
+        var st2  = st_adv(st),
+        var name = st_cur(st2)("v"),
+        var st3  = st_adv(st_adv(st2)),  # skip name and =
+        var r    = p_expr(st3),
+        :: {"node": nd("var_decl", {"name": name, "val": r("node")}), "st": r("st")}
+    },
+
+    # :: expr  — unconditional return
+    st_cur(st)("t") == "DCOLON": {
+        var st2 = st_adv(st),
+        var r   = p_expr(st2),
+        :: {"node": nd("branch", {"cond": none, "body": r("node"), "is_ret": true}), "st": r("st")}
+    },
+
+    # break
+    st_cur(st)("t") == "BREAK": {
+        :: {"node": nd("branch", {"cond": none, "body": nd("break_node", {}), "is_ret": true}), "st": st_adv(st)}
+    },
+
+    # cond :: body  or  cond : body  or  bare expr
+    var r = p_expr(st),
+    var cond = r("node"),
+    var st2  = r("st"),
+
+    st_cur(st2)("t") == "DCOLON": {
+        var st3 = st_adv(st2),
+        var rb  = p_expr(st3),
+        :: {"node": nd("branch", {"cond": cond, "body": rb("node"), "is_ret": true}), "st": rb("st")}
+    },
+
+    st_cur(st2)("t") == "COLON": {
+        var st3 = st_adv(st2),
+        st_cur(st3)("t") == "LBRACE": {
+            var rb = p_block(st3),
+            :: {"node": nd("branch", {"cond": cond, "body": rb("node"), "is_ret": false}), "st": rb("st")}
+        },
+        var rb = p_expr(st3),
+        :: {"node": nd("branch", {"cond": cond, "body": rb("node"), "is_ret": false}), "st": rb("st")}
+    },
+
+    :: {"node": nd("branch", {"cond": none, "body": cond, "is_ret": false}), "st": st2}
+}
+
+# ── Block { stmt, stmt, ... } ─────────────────────────────────────────────────
+p_block = (st){
+    var st2   = st_adv(st),          # consume {
+    var stmts = list(),
+    var done9 = false,
+    (:)={
+        done9: break,
+        st_cur(st2)("t") == "RBRACE" or st_cur(st2)("t") == "EOF": { done9 = true },
+        st_cur(st2)("t") != "RBRACE" and st_cur(st2)("t") != "EOF": {
+            var r = p_stmt(st2),
+            push(stmts, r("node")),
+            st2 = r("st"),
+            st_cur(st2)("t") == "COMMA": { st2 = st_adv(st2) }
+        }
+    },
+    :: {"node": nd("block", {"stmts": stmts}), "st": st_adv(st2)}
+}
+
+# ── Statement ─────────────────────────────────────────────────────────────────
+var p_stmt = (st){
+    st_cur(st)("t") == "VAR": {
+        var st2  = st_adv(st),
+        var name = st_cur(st2)("v"),
+        var st3  = st_adv(st_adv(st2)),  # skip name =
+        var r    = p_expr(st3),
+        :: {"node": nd("var_decl", {"name": name, "val": r("node")}), "st": r("st")}
+    },
+    var r = p_expr(st),
+    :: {"node": r("node"), "st": r("st")}
+}
+
+# ── Program ───────────────────────────────────────────────────────────────────
+var parse = (tokens){
+    var st    = mk_st(tokens),
+    var stmts = list(),
+    var done  = false,
+    (:)={
+        done: break,
+        st_cur(st)("t") == "EOF": { done = true },
+        st_cur(st)("t") != "EOF": {
+            var r = p_stmt(st),
+            push(stmts, r("node")),
+            st = r("st")
+        }
+    },
+    :: nd("prog", {"stmts": stmts})
+}

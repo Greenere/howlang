@@ -299,7 +299,22 @@ class Interpreter:
             if isinstance(m, HowInstance): return HowList(list(m.fields.values()))
             raise HowError("values() requires a map or instance")
 
-        def _input(prompt=""):  return input(how_repr(prompt))
+        def _args():
+            import sys as _sys
+            return HowList(list(_sys.argv[1:]))
+
+        def _ask(prompt=""):
+            try:
+                return input(how_repr(prompt))
+            except EOFError:
+                return None
+
+        def _read(filepath):
+            try:
+                with open(str(filepath), "r", encoding="utf-8") as f:
+                    return f.read()
+            except OSError as e:
+                raise HowError(f"read(): cannot open {filepath!r}: {e}")
 
         def _abs(x):
             if isinstance(x, (int, float)): return float(abs(x))
@@ -371,7 +386,7 @@ class Interpreter:
             "print": _print, "len": _len, "range": _range,
             "str": _str, "num": _num, "bool": _bool_fn, "type": _type,
             "list": _list, "map": _map, "push": _push, "pop": _pop,
-            "keys": _keys, "values": _values, "input": _input,
+            "keys": _keys, "values": _values, "ask": _ask, "read": _read, "args": _args,
             "abs": _abs, "floor": _floor, "ceil": _ceil,
             "sqrt": _sqrt, "max": _max_fn, "min": _min_fn,
             "has_key": _has_key, "set_key": _set_key,

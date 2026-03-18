@@ -1,0 +1,452 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# how_eval.how  —  Tree-walking evaluator for the Howlang meta-interpreter
+#
+# Environments are linked maps:  { "vars": map(), "parent": env_or_none }
+# Runtime values are plain Howlang values — numbers, strings, bools, none,
+# plus HowList/HowMap from the host.  Functions are maps:
+#   { "tag": "closure", "params": list, "branches": list, "env": env, "is_loop": bool }
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Environment ───────────────────────────────────────────────────────────────
+
+var env_new = (parent){
+    :: {"vars": map(), "parent": parent}
+}
+
+var env_get = (env, name){
+    has_key(env("vars"), name): { :: get_key(env("vars"), name) },
+    env("parent") != none:       { :: env_get(env("parent"), name) },
+    :: none     # undefined → none (lenient)
+}
+
+var env_set = (env, name, val){
+    set_key(env("vars"), name, val)
+}
+
+var env_assign = (env, name, val){
+    has_key(env("vars"), name): {
+        set_key(env("vars"), name, val)
+    },
+    has_key(env("vars"), name) == false and env("parent") != none: {
+        env_assign(env("parent"), name, val)
+    },
+    has_key(env("vars"), name) == false and env("parent") == none: {
+        set_key(env("vars"), name, val)   # declare at top level as fallback
+    }
+}
+
+# ── Truthiness ────────────────────────────────────────────────────────────────
+
+var is_truthy = (v){
+    v == none  :: false,
+    v == false :: false,
+    v == 0     :: false,
+    :: true
+}
+
+# ── Exceptions via result tags ────────────────────────────────────────────────
+# We can't throw real exceptions in meta-Howlang, so we thread a signal map
+# through evaluation:
+#   normal:  {"sig": "ok",     "val": value}
+#   return:  {"sig": "return", "val": value}
+#   break:   {"sig": "break",  "val": none}
+
+var ok_sig     = (v)    { :: {"sig": "ok",     "val": v}    }
+var ret_sig    = (v)    { :: {"sig": "return",  "val": v}    }
+var break_sig  = ()     { :: {"sig": "break",   "val": none} }
+
+# ── Forward declarations ──────────────────────────────────────────────────────
+var eval_node     = none
+var eval_branches = none
+var eval_block    = none
+var call_fn       = none
+
+# ── Value display ─────────────────────────────────────────────────────────────
+var meta_repr = (v){
+    v == none  :: "none",
+    v == true  :: "true",
+    v == false :: "false",
+    type(v) == "number": {
+        v == floor(v) :: str(floor(v)),
+        :: str(v)
+    },
+    :: str(v)
+}
+
+# ── Built-in functions available inside the meta-interpreter ──────────────────
+var make_globals = (){
+    var g = env_new(none),
+
+    env_set(g, "print", {"tag": "builtin", "name": "print"}),
+    env_set(g, "len",   {"tag": "builtin", "name": "len"}),
+    env_set(g, "str",   {"tag": "builtin", "name": "str"}),
+    env_set(g, "num",   {"tag": "builtin", "name": "num"}),
+    env_set(g, "type",  {"tag": "builtin", "name": "type"}),
+    env_set(g, "floor", {"tag": "builtin", "name": "floor"}),
+    env_set(g, "push",  {"tag": "builtin", "name": "push"}),
+    env_set(g, "pop",   {"tag": "builtin", "name": "pop"}),
+    env_set(g, "list",  {"tag": "builtin", "name": "list"}),
+    env_set(g, "map",   {"tag": "builtin", "name": "map"}),
+    env_set(g, "keys",  {"tag": "builtin", "name": "keys"}),
+    env_set(g, "has_key",  {"tag": "builtin", "name": "has_key"}),
+    env_set(g, "ask",      {"tag": "builtin", "name": "ask"}),
+    env_set(g, "args",     {"tag": "builtin", "name": "args"}),
+    env_set(g, "read",     {"tag": "builtin", "name": "read"}),
+    env_set(g, "set_key",  {"tag": "builtin", "name": "set_key"}),
+    env_set(g, "get_key",  {"tag": "builtin", "name": "get_key"}),
+    env_set(g, "true",  true),
+    env_set(g, "false", false),
+    env_set(g, "none",  none),
+    :: g
+}
+
+var call_builtin = (name, args){
+    name == "print": {
+        var i = 0, var parts = list(),
+        (0:len(args)) = i{ push(parts, meta_repr(args(i))) },
+        var s = "",
+        (0:len(parts)) = i{
+            i > 0: s = s + " ",
+            s = s + parts(i)
+        },
+        print(s),
+        :: ok_sig(none)
+    },
+    name == "len":     { :: ok_sig(len(args(0))) },
+    name == "str":     { :: ok_sig(meta_repr(args(0))) },
+    name == "num":     { :: ok_sig(num(str(args(0)))) },
+    name == "type":    { :: ok_sig(type(args(0))) },
+    name == "floor":   { :: ok_sig(floor(args(0))) },
+    name == "push":    { push(args(0), args(1)), :: ok_sig(args(0)) },
+    name == "pop":     { :: ok_sig(pop(args(0))) },
+    name == "list":    { :: ok_sig(list()) },
+    name == "map":     { :: ok_sig(map()) },
+    name == "keys":    { :: ok_sig(keys(args(0))) },
+    name == "has_key": { :: ok_sig(has_key(args(0), args(1))) },
+    name == "set_key": { set_key(args(0), args(1), args(2)), :: ok_sig(args(2)) },
+    name == "get_key": { :: ok_sig(get_key(args(0), args(1))) },
+    name == "ask":     { :: ok_sig(ask(args(0))) },
+    name == "args":    { :: ok_sig(args()) },
+    name == "read":    { :: ok_sig(read(args(0))) },
+    :: ok_sig(none)
+}
+
+# ── Augmented assignment helpers ──────────────────────────────────────────────
+var apply_aug = (old, op, val){
+    op == "+=" :: old + val,
+    op == "-=" :: old - val,
+    op == "*=" :: old * val,
+    op == "/=" :: old / val,
+    :: val
+}
+
+# ── Main evaluator ────────────────────────────────────────────────────────────
+eval_node = (node, env){
+    var tag = node("tag"),
+
+    tag == "num"      :: ok_sig(node("v")),
+    tag == "str"      :: ok_sig(node("v")),
+    tag == "bool"     :: ok_sig(node("v")),
+    tag == "none_lit" :: ok_sig(none),
+    tag == "break_node" :: break_sig(),
+
+    tag == "ident": {
+        :: ok_sig(env_get(env, node("name")))
+    },
+
+    tag == "unary": {
+        var r = eval_node(node("e"), env),
+        r("sig") != "ok" :: r,
+        node("op") == "-"   :: ok_sig(-r("val")),
+        node("op") == "not" :: ok_sig(is_truthy(r("val")) == false),
+        :: ok_sig(r("val"))
+    },
+
+    tag == "binop": {
+        var op = node("op"),
+        # Short-circuit
+        op == "and": {
+            var l = eval_node(node("l"), env),
+            l("sig") != "ok" :: l,
+            is_truthy(l("val")) == false :: ok_sig(l("val")),
+            :: eval_node(node("r"), env)
+        },
+        op == "or": {
+            var l = eval_node(node("l"), env),
+            l("sig") != "ok" :: l,
+            is_truthy(l("val")) :: ok_sig(l("val")),
+            :: eval_node(node("r"), env)
+        },
+        var l = eval_node(node("l"), env),
+        l("sig") != "ok" :: l,
+        var r = eval_node(node("r"), env),
+        r("sig") != "ok" :: r,
+        var lv = l("val"), var rv = r("val"),
+        op == "+"  :: ok_sig(lv + rv),
+        op == "-"  :: ok_sig(lv - rv),
+        op == "*"  :: ok_sig(lv * rv),
+        op == "/"  :: ok_sig(lv / rv),
+        op == "%"  :: ok_sig(lv % rv),
+        op == "==" :: ok_sig(lv == rv),
+        op == "!=" :: ok_sig(lv != rv),
+        op == "<"  :: ok_sig(lv < rv),
+        op == ">"  :: ok_sig(lv > rv),
+        op == "<=" :: ok_sig(lv <= rv),
+        op == ">=" :: ok_sig(lv >= rv),
+        :: ok_sig(none)
+    },
+
+    tag == "assign": {
+        var rv = eval_node(node("val"), env),
+        rv("sig") != "ok" :: rv,
+        var tgt = node("target"),
+        tgt("tag") == "ident": {
+            var op = node("op"),
+            op == "=": {
+                env_assign(env, tgt("name"), rv("val")),
+                :: ok_sig(rv("val"))
+            },
+            var old = env_get(env, tgt("name")),
+            var newv = apply_aug(old, op, rv("val")),
+            env_assign(env, tgt("name"), newv),
+            :: ok_sig(newv)
+        },
+        tgt("tag") == "dot": {
+            var objr = eval_node(tgt("obj"), env),
+            objr("sig") != "ok" :: objr,
+            set_key(objr("val"), tgt("attr"), rv("val")),
+            :: ok_sig(rv("val"))
+        },
+        :: ok_sig(none)
+    },
+
+    tag == "dot": {
+        var r = eval_node(node("obj"), env),
+        r("sig") != "ok" :: r,
+        var obj  = r("val"),
+        var attr = node("attr"),
+        type(obj) == "map" or type(obj) == "instance": {
+            has_key(obj, attr) :: ok_sig(get_key(obj, attr)),
+            :: ok_sig(none)
+        },
+        :: ok_sig(none)
+    },
+
+    tag == "slice": {
+        var r = eval_node(node("col"), env),
+        r("sig") != "ok" :: r,
+        var col = r("val"),
+        var start = none, var stop = none,
+        node("start") != none: {
+            var rs = eval_node(node("start"), env),
+            rs("sig") != "ok" :: rs,
+            start = rs("val")
+        },
+        node("stop") != none: {
+            var re = eval_node(node("stop"), env),
+            re("sig") != "ok" :: re,
+            stop = re("val")
+        },
+        type(col) == "list": {
+            var s = 0,
+            start != none: s = floor(start),
+            var e = len(col),
+            stop != none: e = floor(stop),
+            :: ok_sig(col(s:e))
+        },
+        type(col) == "string": {
+            var s = 0,
+            start != none: s = floor(start),
+            var e = len(col),
+            stop != none: e = floor(stop),
+            :: ok_sig(col(s:e))
+        },
+        :: ok_sig(none)
+    },
+
+    tag == "call": {
+        var rc = eval_node(node("callee"), env),
+        rc("sig") != "ok" :: rc,
+        var callee = rc("val"),
+        # Evaluate args
+        var args = list(),
+        var ai = 0,
+        var arg_nodes = node("args"),
+        var arg_ok = true,
+        (0:len(arg_nodes)) = ai{
+            var ra = eval_node(arg_nodes(ai), env),
+            ra("sig") != "ok": { arg_ok = false },
+            ra("sig") == "ok": push(args, ra("val"))
+        },
+        # Call
+        type(callee) == "map" and has_key(callee, "tag") and get_key(callee, "tag") == "builtin": {
+            :: call_builtin(get_key(callee, "name"), args)
+        },
+        type(callee) == "map" and has_key(callee, "tag") and get_key(callee, "tag") == "closure": {
+            :: call_fn(callee, args)
+        },
+        # Call on list/map → index
+        type(callee) == "list": { :: ok_sig(callee(floor(args(0)))) },
+        type(callee) == "map":  {
+            has_key(callee, args(0)): { :: ok_sig(get_key(callee, args(0))) },
+            :: ok_sig(none)
+        },
+        :: ok_sig(none)
+    },
+
+    tag == "func": {
+        :: ok_sig({"tag": "closure", "params": node("params"),
+                   "branches": node("branches"), "env": env,
+                   "is_loop": node("is_loop")})
+    },
+
+    tag == "map_lit": {
+        var items = node("items"),
+        # Detect list vs map
+        len(items) == 0: { :: ok_sig(map()) },
+        items(0)("k") == none: {
+            var lst = list(),
+            var ii = 0,
+            (0:len(items)) = ii{
+                var rv2 = eval_node(items(ii)("v"), env),
+                rv2("sig") == "ok": push(lst, rv2("val"))
+            },
+            :: ok_sig(lst)
+        },
+        var m = map(),
+        var ii = 0,
+        (0:len(items)) = ii{
+            var rk2 = eval_node(items(ii)("k"), env),
+            var rv2 = eval_node(items(ii)("v"), env),
+            rk2("sig") == "ok" and rv2("sig") == "ok": {
+                set_key(m, rk2("val"), rv2("val"))
+            }
+        },
+        :: ok_sig(m)
+    },
+
+    tag == "var_decl": {
+        var r = eval_node(node("val"), env),
+        r("sig") != "ok" :: r,
+        env_set(env, node("name"), r("val")),
+        :: ok_sig(r("val"))
+    },
+
+    tag == "block": {
+        :: eval_block(node("stmts"), env)
+    },
+
+    tag == "prog": {
+        var stmts = node("stmts"),
+        var si = 0,
+        var result = ok_sig(none),
+        (0:len(stmts)) = si{
+            var r = eval_node(stmts(si), env),
+            r("sig") == "return" or r("sig") == "break": { result = r, si = len(stmts) },
+            r("sig") == "ok": result = r
+        },
+        :: result
+    },
+
+    :: ok_sig(none)
+}
+
+# ── Block evaluation ──────────────────────────────────────────────────────────
+eval_block = (stmts, env){
+    var child = env_new(env),
+    var si = 0,
+    var result = ok_sig(none),
+    (0:len(stmts)) = si{
+        result("sig") == "ok": {
+            var r = eval_node(stmts(si), child),
+            result = r
+        }
+    },
+    :: result
+}
+
+# ── Branch list evaluation ────────────────────────────────────────────────────
+eval_branches = (branches, env){
+    var bi = 0,
+    var result = ok_sig(none),
+    var done = false,
+    (:)={
+        done: break,
+        bi >= len(branches): { done = true },
+        bi < len(branches): {
+            var b   = branches(bi),
+            var tag = b("tag"),
+
+            # var_decl inside branch list
+            tag == "var_decl": {
+                var r = eval_node(b("val"), env),
+                r("sig") == "ok": env_set(env, b("name"), r("val")),
+                bi = bi + 1
+            },
+
+            # branch node
+            tag == "branch": {
+                var cond = b("cond"),
+                var cond_ok = true,
+                cond != none: {
+                    var rc = eval_node(cond, env),
+                    rc("sig") != "ok": { result = rc, done = true, cond_ok = false },
+                    rc("sig") == "ok" and is_truthy(rc("val")) == false: { cond_ok = false }
+                },
+                cond_ok: {
+                    b("is_ret"): {
+                        var rb = eval_node(b("body"), env),
+                        rb("sig") == "break": { result = break_sig(), done = true },
+                        rb("sig") != "break": {
+                            result = ret_sig(rb("val")),
+                            done   = true
+                        }
+                    },
+                    b("is_ret") == false: {
+                        var rb = eval_node(b("body"), env),
+                        rb("sig") == "break": { result = break_sig(), done = true },
+                        rb("sig") == "return": { result = rb, done = true },
+                        rb("sig") == "ok": bi = bi + 1
+                    }
+                },
+                cond_ok == false: { bi = bi + 1 }
+            },
+
+            tag != "var_decl" and tag != "branch": { bi = bi + 1 }
+        }
+    },
+    :: result
+}
+
+# ── Function call ─────────────────────────────────────────────────────────────
+call_fn = (fn, args){
+    fn("is_loop"): {
+        # Unbounded loop
+        var local = env_new(fn("env")),
+        var loop_result = ok_sig(none),
+        var loop_done   = false,
+        (:)={
+            loop_done: break,
+            var r = eval_branches(fn("branches"), local),
+            r("sig") == "return": { loop_result = ok_sig(r("val")), loop_done = true },
+            r("sig") == "break":  { loop_result = ok_sig(none),     loop_done = true },
+            r("sig") == "ok":     none   # keep looping
+        },
+        :: loop_result
+    },
+    # Normal function
+    var local = env_new(fn("env")),
+    var pi = 0,
+    (0:len(fn("params"))) = pi{
+        env_set(local, fn("params")(pi), args(pi))
+    },
+    var r = eval_branches(fn("branches"), local),
+    r("sig") == "return" :: ok_sig(r("val")),
+    :: ok_sig(none)
+}
+
+# ── Public entry point ────────────────────────────────────────────────────────
+var meta_eval = (ast){
+    var g = make_globals(),
+    :: eval_node(ast, g)
+}

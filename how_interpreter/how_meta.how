@@ -1,0 +1,104 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# how_meta.how  —  Howlang meta-interpreter  (Howlang running inside Howlang)
+#
+# Usage:
+#   python howlang.py how_meta.how              # meta REPL
+#   python howlang.py how_meta.how script.how   # run script.how in meta-interp
+#
+# The meta-interpreter shares a single persistent environment across REPL
+# lines so variables defined in one line are visible in the next.
+# ─────────────────────────────────────────────────────────────────────────────
+
+how how_lexer
+how how_parser
+how how_eval
+
+# ── Core run helpers ──────────────────────────────────────────────────────────
+
+var meta_run = (source){
+    var tokens = how_lexer.tokenise(source),
+    var ast    = how_parser.parse(tokens),
+    :: how_eval.meta_eval(ast)
+}
+
+var meta_run_in = (source, env){
+    var tokens = how_lexer.tokenise(source),
+    var ast    = how_parser.parse(tokens),
+    :: how_eval.eval_node(ast, env)
+}
+
+var meta_run_file = (path){
+    :: meta_run(read(path))
+}
+
+# ── REPL loop ─────────────────────────────────────────────────────────────────
+
+var meta_repl = (){
+    print("Howlang meta-interpreter  |  quit() or Ctrl-D to exit"),
+
+    var env   = how_eval.make_globals(),
+    var buf   = "",
+    var going = true,
+
+    (:)={
+        going == false: break,
+
+        var prompt = "m>> ",
+        buf != "": prompt = "... ",
+
+        var line = ask(prompt),
+
+        line == none: {
+            print(""),
+            going = false
+        },
+
+        line != none and (line == "quit()" or line == "exit"): {
+            going = false
+        },
+
+        line != none and line != "quit()" and line != "exit": {
+            buf != "": buf = buf + "\n" + line,
+            buf == "": buf = line,
+
+            var last = "",
+            len(buf) > 0: last = buf(len(buf)-1:len(buf)),
+
+            # Count unbalanced braces to detect incomplete input
+            var open_count  = 0,
+            var close_count = 0,
+            var ci = 0,
+            (0:len(buf)) = ci{
+                buf(ci:ci+1) == "{": open_count = open_count + 1,
+                buf(ci:ci+1) == "}": close_count = close_count + 1
+            },
+            var balanced = open_count == close_count,
+
+            # Continue accumulating if unbalanced braces or line ends with , or {
+            balanced and last != "{" and last != ",": {
+                var src = buf,
+                buf = "",
+                var tokens = how_lexer.tokenise(src),
+                var ast    = how_parser.parse(tokens),
+                var r      = how_eval.eval_node(ast, env),
+                r("sig") == "ok" and r("val") != none: {
+                    # Only echo value for expression statements, not var declarations
+                    var stmts  = ast("stmts"),
+                    var last_s = stmts(len(stmts) - 1),
+                    last_s("tag") != "var_decl": print(str(r("val")))
+                }
+            }
+        }
+    }
+}
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+# When run as: python howlang.py how_meta.how <script.how>
+# args() returns ["how_meta.how", "script.how"]  — script path is at index 1
+
+(){
+    var argv = args(),
+    var has_script = argv != none and len(argv) >= 2,
+    has_script :: meta_run_file(argv(1)),
+    :: meta_repl()
+}()

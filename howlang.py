@@ -51,7 +51,7 @@ def run_source(source: str, interp: Interpreter, filename: str = "<input>") -> N
 
 def repl():
     interp = Interpreter()
-    print("Howlang 0.1  |  type quit() or Ctrl+D to exit")
+    print("Howlang 0.1  |  type quit() or Ctrl+D to exit  |  builtins: ask() read()")
     buf = []
     while True:
         try:

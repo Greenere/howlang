@@ -1,0 +1,206 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# meta_test.how  —  Tests for the Howlang-in-Howlang meta-interpreter
+# ─────────────────────────────────────────────────────────────────────────────
+
+how how_lexer
+how how_parser
+how how_eval
+
+# Replicate meta_run locally so we don't trigger how_meta's REPL entry point
+var meta_run = (source){
+    var tokens = how_lexer.tokenise(source),
+    var ast    = how_parser.parse(tokens),
+    :: how_eval.meta_eval(ast)
+}
+
+var passed = 0
+var failed = 0
+
+# Run a program in the meta-interpreter and return its output signal
+var run = (src){ :: meta_run(src) }
+
+# Run and extract the value
+var run_val = (src){
+    var r = run(src),
+    :: r("val")
+}
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        print("  PASS  " + label),
+        passed = passed + 1
+    },
+    got != expected: {
+        print("  FAIL  " + label + "  got=" + str(got) + "  expected=" + str(expected)),
+        failed = failed + 1
+    }
+}
+
+var assert_none = (label, val){ assert_eq(label, val, none)  }
+var assert_true = (label, val){ assert_eq(label, val, true)  }
+
+
+print("─── Primitives ──────────────────────────────────────────────────────────")
+
+assert_eq("number literal",    run_val("var x = 42"),                  42)
+assert_eq("string literal",    run_val("var x = \"hi\""),              "hi")
+assert_eq("bool true",         run_val("var x = true"),                true)
+assert_eq("bool false",        run_val("var x = false"),               false)
+assert_none("none literal",    run_val("var x = none"))
+
+
+print("─── Arithmetic ──────────────────────────────────────────────────────────")
+
+assert_eq("addition",          run_val("var x = 1 + 2"),               3)
+assert_eq("subtraction",       run_val("var x = 10 - 3"),              7)
+assert_eq("multiplication",    run_val("var x = 4 * 5"),               20)
+assert_eq("division",          run_val("var x = 10 / 4"),              2.5)
+assert_eq("modulo",            run_val("var x = 7 % 3"),               1)
+assert_eq("precedence",        run_val("var x = 2 + 3 * 4"),           14)
+assert_eq("negation",          run_val("var x = -7"),                  -7)
+assert_eq("string concat",     run_val("var x = \"a\" + \"b\""),       "ab")
+
+
+print("─── Comparison & logic ──────────────────────────────────────────────────")
+
+assert_true("equal",           run_val("var x = 3 == 3"))
+assert_eq("not equal",         run_val("var x = 3 != 4"),              true)
+assert_true("less than",       run_val("var x = 2 < 5"))
+assert_true("greater than",    run_val("var x = 5 > 2"))
+assert_true("lte",             run_val("var x = 3 <= 3"))
+assert_true("gte",             run_val("var x = 4 >= 3"))
+assert_true("and true",        run_val("var x = true and true"))
+assert_eq("and false",         run_val("var x = true and false"),       false)
+assert_true("or",              run_val("var x = false or true"))
+assert_eq("not",               run_val("var x = not true"),             false)
+
+
+print("─── Variables & assignment ──────────────────────────────────────────────")
+
+assert_eq("var then reassign", run_val("var x = 1\nx = 2"),            2)
+assert_eq("augmented +=",      run_val("var x = 5\nx += 3"),           8)
+assert_eq("augmented -=",      run_val("var x = 5\nx -= 2"),           3)
+assert_eq("augmented *=",      run_val("var x = 3\nx *= 4"),           12)
+
+
+print("─── Functions & branching ───────────────────────────────────────────────")
+
+assert_eq("simple function",
+    run_val("var f = (x){ :: x * 2 }\nvar y = f(5)"), 10)
+
+assert_eq("branching function",
+    run_val("var sign = (n){ n > 0 :: 1, n < 0 :: -1, :: 0 }\nvar y = sign(-3)"), -1)
+
+assert_eq("multiple params",
+    run_val("var add = (a, b){ :: a + b }\nvar y = add(3, 4)"), 7)
+
+assert_eq("closure captures var",
+    run_val("var n = 10\nvar f = (x){ :: x + n }\nvar y = f(5)"), 15)
+
+assert_eq("local var in function",
+    run_val("var f = (x){ var t = x * x\n :: t + 1 }\nvar y = f(4)"), 17)
+
+assert_eq("recursion: factorial",
+    run_val("var fact = (n){ n <= 1 :: 1\n :: n * fact(n-1) }\nvar y = fact(5)"), 120)
+
+assert_eq("recursion: fibonacci",
+    run_val("var fib = (n){ n < 2 :: n\n :: fib(n-1)+fib(n-2) }\nvar y = fib(8)"), 21)
+
+
+print("─── Loops ───────────────────────────────────────────────────────────────")
+
+assert_eq("unbounded loop",
+    run_val("var i = 0\n(:){ i >= 5 :: i\ni += 1 }()"), 5)
+
+assert_eq("loop accumulation",
+    run_val("var s = 0\nvar i = 1\n(:){ i > 5 :: s\ns += i\ni += 1 }()"), 15)
+
+
+print("─── Lists ───────────────────────────────────────────────────────────────")
+
+assert_eq("list literal",
+    run_val("var xs = {10, 20, 30}\nvar y = xs(1)"), 20)
+
+assert_eq("list length",
+    run_val("var xs = {1, 2, 3, 4}\nvar y = len(xs)"), 4)
+
+assert_eq("list push/pop",
+    run_val("var xs = list()\npush(xs, 7)\npush(xs, 9)\nvar y = pop(xs)"), 9)
+
+assert_eq("list slice",
+    run_val("var xs = {10, 20, 30, 40}\nvar s = xs(1:3)\nvar y = s(0)"), 20)
+
+assert_eq("list concat",
+    run_val("var a = {1,2}\nvar b = {3,4}\nvar c = a + b\nvar y = c(2)"), 3)
+
+
+print("─── Maps ────────────────────────────────────────────────────────────────")
+
+assert_eq("map literal",
+    run_val("var m = {\"x\": 10, \"y\": 20}\nvar v = m(\"x\")"), 10)
+
+assert_eq("map via builtins",
+    run_val("var m = map()\nset_key(m, \"k\", 99)\nvar v = get_key(m, \"k\")"), 99)
+
+assert_eq("has_key true",
+    run_val("var m = map()\nset_key(m, \"a\", 1)\nvar v = has_key(m, \"a\")"), true)
+
+assert_eq("has_key false",
+    run_val("var m = map()\nvar v = has_key(m, \"z\")"), false)
+
+assert_eq("dot access on map",
+    run_val("var m = {\"score\": 42}\nvar v = m.score"), 42)
+
+
+print("─── Nested programs ─────────────────────────────────────────────────────")
+
+assert_eq("merge sort",
+    run_val("
+var merge = (a, b){
+    len(a) == 0 :: b,
+    len(b) == 0 :: a,
+    a(0) <= b(0) :: a(:1) + merge(a(1:), b),
+    :: b(:1) + merge(b(1:), a)
+}
+var sort = (xs){
+    len(xs) == 1 :: xs,
+    var mid = floor(len(xs) / 2),
+    :: merge(sort(xs(:mid)), sort(xs(mid:)))
+}
+var res = sort({5, 2, 8, 1, 9, 3})
+var y = res(0)
+"), 1)
+
+assert_eq("recursive sum",
+    run_val("
+var sum = (xs){
+    len(xs) == 1 :: xs(0),
+    :: xs(0) + sum(xs(1:))
+}
+var y = sum({1, 2, 3, 4, 5})
+"), 15)
+
+assert_eq("higher-order: apply fn",
+    run_val("
+var apply = (f, x){ :: f(x) }
+var double = (x){ :: x * 2 }
+var y = apply(double, 7)
+"), 14)
+
+assert_eq("closure as accumulator",
+    run_val("
+var make_counter = (){
+    var n = 0,
+    :: (){ n = n + 1\n :: n }
+}
+var c = make_counter()
+c()
+c()
+var y = c()
+"), 3)
+
+
+print("")
+print("═════════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════════")
