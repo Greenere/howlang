@@ -1,19 +1,30 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # how_meta.how  —  Howlang meta-interpreter  (Howlang running inside Howlang)
 #
-# Usage:
-#   python howlang.py how_meta.how              # meta REPL
-#   python howlang.py how_meta.how script.how   # run script.how in meta-interp
+# Designed to be interpretable both by the host interpreter AND by itself.
 #
-# The meta-interpreter shares a single persistent environment across REPL
-# lines so variables defined in one line are visible in the next.
+# Usage (host):
+#   python howlang.py how_meta.how              # meta REPL
+#   python howlang.py how_meta.how script.how   # run script through meta-interp
+#
+# Usage (meta — two levels deep):
+#   python howlang.py how_meta.how how_meta.how              # meta-meta REPL
+#   python howlang.py how_meta.how how_meta.how script.how   # three levels
 # ─────────────────────────────────────────────────────────────────────────────
 
 how how_lexer
 how how_parser
 how how_eval
 
-# ── Core run helpers ──────────────────────────────────────────────────────────
+# ── Override _lex/_parse with meta versions for self-hosting ─────────────────
+# When the meta-interpreter itself runs a `how` statement, it should use
+# how_lexer.tokenise and how_parser.parse (not the host versions).
+# We create a patched make_globals that injects meta-aware _lex/_parse.
+
+# make_globals already uses _meta_lex/_meta_parse — no override needed
+var meta_make_globals = how_eval.make_globals
+
+# ── Core: run a source string, returning a signal {sig, val} ─────────────────
 
 var meta_run = (source){
     var tokens = how_lexer.tokenise(source),
@@ -21,22 +32,27 @@ var meta_run = (source){
     :: how_eval.meta_eval(ast)
 }
 
+# Run source inside an existing environment (for REPL persistent state)
 var meta_run_in = (source, env){
     var tokens = how_lexer.tokenise(source),
     var ast    = how_parser.parse(tokens),
     :: how_eval.eval_node(ast, env)
 }
 
+# Run a .how file — push its directory onto _import_dirs so `how` statements
+# inside the script can find sibling modules in the same directory
 var meta_run_file = (path){
+    # Add the script's directory to module search path, then run
+    _push_import_dir(path),
     :: meta_run(read(path))
 }
 
-# ── REPL loop ─────────────────────────────────────────────────────────────────
+# ── REPL ──────────────────────────────────────────────────────────────────────
 
 var meta_repl = (){
     print("Howlang meta-interpreter  |  quit() or Ctrl-D to exit"),
 
-    var env   = how_eval.make_globals(),
+    var env   = meta_make_globals(),
     var buf   = "",
     var going = true,
 
@@ -44,10 +60,11 @@ var meta_repl = (){
         going == false: break,
 
         var prompt = "m>> ",
-        buf != "": prompt = "... ",
+        buf != "": prompt = "...",
 
         var line = ask(prompt),
 
+        # EOF → ask() returns none
         line == none: {
             print(""),
             going = false
@@ -64,39 +81,27 @@ var meta_repl = (){
             var last = "",
             len(buf) > 0: last = buf(len(buf)-1:len(buf)),
 
-            # Count unbalanced braces to detect incomplete input
-            var open_count  = 0,
-            var close_count = 0,
-            var ci = 0,
-            (0:len(buf)) = ci{
-                buf(ci:ci+1) == "{": open_count = open_count + 1,
-                buf(ci:ci+1) == "}": close_count = close_count + 1
-            },
-            var balanced = open_count == close_count,
-
-            # Continue accumulating if unbalanced braces or line ends with , or {
-            balanced and last != "{" and last != ",": {
+            # Keep accumulating if line ends with { or ,
+            last != "{" and last != ",": {
                 var src = buf,
                 buf = "",
                 var tokens = how_lexer.tokenise(src),
                 var ast    = how_parser.parse(tokens),
                 var r      = how_eval.eval_node(ast, env),
-                r("sig") == "ok" and r("val") != none: {
-                    # Only echo value for expression statements, not var declarations
-                    var stmts  = ast("stmts"),
-                    var last_s = stmts(len(stmts) - 1),
-                    last_s("tag") != "var_decl": print(str(r("val")))
-                }
+                r("sig") == "ok" and r("val") != none: print(str(r("val")))
             }
         }
     }
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-# When run as: python howlang.py how_meta.how <script.how>
-# args() returns ["how_meta.how", "script.how"]  — script path is at index 1
+# args() = sys.argv[1:]
+# When run as: python howlang.py how_meta.how [script.how]
+#   argv = ["how_meta.how"]           → no script → start REPL
+#   argv = ["how_meta.how", "x.how"]  → script at argv(1) → run it
 
 (){
+    # argv(0) = this interpreter file, argv(1) = script to run (if any)
     var argv = args(),
     var has_script = argv != none and len(argv) >= 2,
     has_script :: meta_run_file(argv(1)),

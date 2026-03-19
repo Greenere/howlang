@@ -60,6 +60,7 @@ var keyword_type = (w){
     w == "or"    :: "OR",
     w == "not"   :: "NOT",
     w == "break" :: "BREAK",
+    w == "how"   :: "HOW",
     :: "IDENT"
 }
 

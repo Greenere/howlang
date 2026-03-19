@@ -229,6 +229,7 @@ class Interpreter:
     def __init__(self):
         self.globals = Environment()
         self._import_dirs: list = [os.getcwd()]
+        self._meta_module_cache: dict = {}
         self._builtin_names: set = set()
         self._setup_builtins()
 
@@ -298,6 +299,195 @@ class Interpreter:
             if isinstance(m, HowMap):      return HowList(list(m.items.values()))
             if isinstance(m, HowInstance): return HowList(list(m.fields.values()))
             raise HowError("values() requires a map or instance")
+
+        # These get populated when how_lexer/how_parser are imported as modules
+        meta_modules = {}
+
+        def _set_meta_module(name, module_env):
+            meta_modules[name] = module_env
+
+        def _meta_lex(source):
+            """Tokenize using the meta-lexer (returns HowList of HowMap tokens)."""
+            cache = self._meta_module_cache
+            if 'how_lexer' in cache:
+                tokenise = cache['how_lexer'].vars.get('tokenise')
+                if tokenise:
+                    return self.call_function(tokenise, [str(source)])
+            # Fallback: host lexer wrapping tokens as HowMaps
+            from lexer import Lexer as _Lexer
+            host_toks = _Lexer(str(source)).tokenize()
+            result = []
+            for t in host_toks:
+                m = HowMap({'t': t.type.name,
+                            'v': t.value,
+                            'ln': float(t.line)})
+                result.append(m)
+            return HowList(result)
+
+        def _meta_parse(tokens):
+            """Parse using the meta-parser (takes HowList of HowMap tokens, returns HowMap AST)."""
+            cache = self._meta_module_cache
+            if 'how_parser' in cache:
+                parse_fn = cache['how_parser'].vars.get('parse')
+                if parse_fn:
+                    return self.call_function(parse_fn, [tokens])
+            # Fallback: convert HowList tokens → host tokens → parse → convert to HowMap
+            from lexer import Token, TT
+            from parser import Parser as _Parser
+            host_toks = []
+            if isinstance(tokens, HowList):
+                for i in range(len(tokens.items)):
+                    tok = tokens.items[i]
+                    if isinstance(tok, HowMap):
+                        t_name = tok.items.get('t', 'EOF')
+                        v = tok.items.get('v')
+                        ln = int(tok.items.get('ln', 1) or 1)
+                        try:
+                            tt = TT[t_name]
+                        except KeyError:
+                            tt = TT.EOF
+                        host_toks.append(Token(tt, v, ln, 1))
+            py_ast = _Parser(host_toks).parse()
+            # Convert Python AST to HowMap AST using the ast-to-howmap converter
+            return _py_ast_to_howmap(py_ast)
+
+        def _py_ast_to_howmap(node):
+            """Convert a Python AST node to a HowMap AST node."""
+            import ast_nodes as AN
+            if isinstance(node, AN.Program):
+                stmts = HowList([_py_ast_to_howmap(s) for s in node.stmts])
+                return HowMap({'tag': 'prog', 'stmts': stmts})
+            if isinstance(node, AN.VarDecl):
+                return HowMap({'tag': 'var_decl', 'name': node.name, 'val': _py_ast_to_howmap(node.value)})
+            if isinstance(node, AN.ExprStmt):
+                return _py_ast_to_howmap(node.expr)
+            if isinstance(node, AN.NumberLit):
+                return HowMap({'tag': 'num', 'v': float(node.value)})
+            if isinstance(node, AN.StringLit):
+                return HowMap({'tag': 'str', 'v': node.value})
+            if isinstance(node, AN.BoolLit):
+                return HowMap({'tag': 'bool', 'v': node.value})
+            if isinstance(node, AN.NoneLit):
+                return HowMap({'tag': 'none_lit'})
+            if isinstance(node, AN.Identifier):
+                return HowMap({'tag': 'ident', 'name': node.name})
+            if isinstance(node, AN.BinOp):
+                return HowMap({'tag': 'binop', 'op': node.op, 'l': _py_ast_to_howmap(node.left), 'r': _py_ast_to_howmap(node.right)})
+            if isinstance(node, AN.UnaryOp):
+                return HowMap({'tag': 'unary', 'op': node.op, 'e': _py_ast_to_howmap(node.operand)})
+            if isinstance(node, AN.Assign):
+                return HowMap({'tag': 'assign', 'target': _py_ast_to_howmap(node.target), 'op': node.op, 'val': _py_ast_to_howmap(node.value)})
+            if isinstance(node, AN.Call):
+                args = HowList([_py_ast_to_howmap(a) for a in node.args])
+                return HowMap({'tag': 'call', 'callee': _py_ast_to_howmap(node.callee), 'args': args})
+            if isinstance(node, AN.Slice):
+                start = _py_ast_to_howmap(node.start) if node.start else None
+                stop = _py_ast_to_howmap(node.stop) if node.stop else None
+                return HowMap({'tag': 'slice', 'col': _py_ast_to_howmap(node.collection), 'start': start, 'stop': stop})
+            if isinstance(node, AN.DotAccess):
+                return HowMap({'tag': 'dot', 'obj': _py_ast_to_howmap(node.obj), 'attr': node.attr})
+            if isinstance(node, AN.FuncExpr):
+                params = HowList(list(node.params))
+                branches = HowList([_py_ast_to_howmap(b) for b in node.branches])
+                return HowMap({'tag': 'func', 'params': params, 'branches': branches, 'is_loop': node.is_loop})
+            if isinstance(node, AN.Branch):
+                cond = _py_ast_to_howmap(node.condition) if node.condition else None
+                body = _py_ast_to_howmap(node.body)
+                return HowMap({'tag': 'branch', 'cond': cond, 'body': body, 'is_ret': node.is_return})
+            if isinstance(node, AN.Block):
+                stmts = HowList([_py_ast_to_howmap(s) for s in node.stmts])
+                return HowMap({'tag': 'block', 'stmts': stmts})
+            if isinstance(node, AN.MapLit):
+                items = HowList([HowMap({'k': _py_ast_to_howmap(k) if k else None, 'v': _py_ast_to_howmap(v)}) for k, v in node.items])
+                return HowMap({'tag': 'map_lit', 'items': items})
+            if isinstance(node, AN.BreakLoop):
+                return HowMap({'tag': 'break_node'})
+            if isinstance(node, AN.ImportStmt):
+                return HowMap({'tag': 'how_stmt', 'name': node.module})
+            if isinstance(node, AN.ForLoop):
+                start = _py_ast_to_howmap(node.start) if node.start else None
+                stop = _py_ast_to_howmap(node.stop) if node.stop else None
+                branches = HowList([_py_ast_to_howmap(b) for b in node.branches])
+                return HowMap({'tag': 'for_loop', 'var': node.iter_var, 'start': start, 'stop': stop, 'branches': branches})
+            # Fallback
+            return HowMap({'tag': 'none_lit'})
+
+        def _host_call(fn, args_list):
+            # Call a host HowFunction from within the meta-evaluator
+            # fn is a HowFunction; args_list is a HowList of already-evaluated values
+            arg_vals = [args_list.get(float(i)) for i in range(len(args_list.items))]
+            return self.call_function(fn, arg_vals)
+
+        def _lex(source):
+            from lexer import Lexer as _Lexer
+            return _Lexer(str(source)).tokenize()
+
+        def _parse(tokens):
+            from parser import Parser as _Parser
+            # tokens can be a HowList of token objects (from meta-lexer)
+            # or a Python list of Token objects (from host lexer)
+            if isinstance(tokens, HowList):
+                # Already a HowList — came from meta-lexer, pass as-is
+                return tokens
+            return _Parser(list(tokens)).parse()
+
+        def _get_meta_dir():
+            """Return __dir from this interpreter's globals (set by how_meta.how)."""
+            v = self.globals.vars.get('__dir')
+            if v is None or v is False:
+                return ''
+            return str(v)
+
+        def _find_how(name):
+            """Resolve <name>.how using the interpreter's import search dirs."""
+            filename = str(name) + '.how'
+            for d in self._import_dirs:
+                candidate = os.path.join(d, filename)
+                if os.path.isfile(candidate):
+                    return candidate
+            return filename   # fallback: bare name (let read() raise)
+
+        def _push_import_dir(path):
+            """Add the directory containing path to _import_dirs (if not already there)."""
+            d = os.path.dirname(os.path.abspath(str(path)))
+            if d not in self._import_dirs:
+                self._import_dirs.insert(0, d)
+            return d
+
+        def _push_import_dir(d):
+            """Add a directory to the front of _import_dirs (if not already present)."""
+            d = str(d)
+            if d not in self._import_dirs:
+                self._import_dirs.insert(0, d)
+            return d
+
+        def _pop_import_dir(d):
+            """Remove a previously pushed directory from _import_dirs."""
+            d = str(d)
+            if d in self._import_dirs:
+                self._import_dirs.remove(d)
+            return d
+
+        def _push_import_dir(path):
+            """Add the directory of 'path' to _import_dirs (front), if not already there."""
+            d = os.path.dirname(os.path.abspath(str(path)))
+            if d not in self._import_dirs:
+                self._import_dirs.insert(0, d)
+            return d
+
+        def _resolve_how(name):
+            """Find name.how in _import_dirs; return its full path."""
+            for d in self._import_dirs:
+                p = os.path.join(d, str(name) + '.how')
+                if os.path.isfile(p):
+                    return p
+            # fallback: bare name (will fail at read time with a clear error)
+            return str(name) + '.how'
+
+        def _dirof(path):
+            """Return the directory of a path with trailing slash, or '' for cwd."""
+            d = os.path.dirname(os.path.abspath(str(path)))
+            return d + os.sep   # always ends with /
 
         def _args():
             import sys as _sys
@@ -386,7 +576,7 @@ class Interpreter:
             "print": _print, "len": _len, "range": _range,
             "str": _str, "num": _num, "bool": _bool_fn, "type": _type,
             "list": _list, "map": _map, "push": _push, "pop": _pop,
-            "keys": _keys, "values": _values, "ask": _ask, "read": _read, "args": _args,
+            "keys": _keys, "values": _values, "ask": _ask, "read": _read, "args": _args, "dirof": _dirof, "__get_meta_dir": _get_meta_dir, "_resolve_how": _resolve_how, "_push_import_dir": _push_import_dir, "_push_import_dir": _push_import_dir, "_pop_import_dir": _pop_import_dir, "_push_import_dir": _push_import_dir, "_find_how": _find_how, "_lex": _lex, "_parse": _parse, "_host_call": _host_call, "_meta_lex": _meta_lex, "_meta_parse": _meta_parse,
             "abs": _abs, "floor": _floor, "ceil": _ceil,
             "sqrt": _sqrt, "max": _max_fn, "min": _min_fn,
             "has_key": _has_key, "set_key": _set_key,
@@ -460,6 +650,9 @@ class Interpreter:
                 mod_env.vars[k] = v
         module = HowModule(module_name, mod_env)
         env.set(module_name, module)
+        # Cache meta-module environments for _meta_lex/_meta_parse builtins
+        if hasattr(self, '_meta_module_cache'):
+            self._meta_module_cache[module_name] = mod_env
 
     # ── Expressions ───────────────────────────────────────────────────────────
 

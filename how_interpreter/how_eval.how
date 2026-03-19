@@ -91,6 +91,15 @@ var make_globals = (){
     env_set(g, "has_key",  {"tag": "builtin", "name": "has_key"}),
     env_set(g, "ask",      {"tag": "builtin", "name": "ask"}),
     env_set(g, "args",     {"tag": "builtin", "name": "args"}),
+    env_set(g, "dirof",    {"tag": "builtin", "name": "dirof"}),
+    env_set(g, "_resolve_how",        {"tag": "builtin", "name": "_resolve_how"}),
+    env_set(g, "_push_import_dir", {"tag": "builtin", "name": "_push_import_dir"}),
+    # __dir is injected by how_meta.how after loading
+    env_set(g, "_lex",     {"tag": "builtin", "name": "_meta_lex"}),
+    env_set(g, "_host_call",  {"tag": "builtin", "name": "_host_call"}),
+    env_set(g, "_meta_lex",   {"tag": "builtin", "name": "_meta_lex"}),
+    env_set(g, "_meta_parse", {"tag": "builtin", "name": "_meta_parse"}),
+    env_set(g, "_parse",   {"tag": "builtin", "name": "_meta_parse"}),
     env_set(g, "read",     {"tag": "builtin", "name": "read"}),
     env_set(g, "set_key",  {"tag": "builtin", "name": "set_key"}),
     env_set(g, "get_key",  {"tag": "builtin", "name": "get_key"}),
@@ -100,10 +109,10 @@ var make_globals = (){
     :: g
 }
 
-var call_builtin = (name, args){
+var call_builtin = (name, bargs){
     name == "print": {
         var i = 0, var parts = list(),
-        (0:len(args)) = i{ push(parts, meta_repr(args(i))) },
+        (0:len(bargs)) = i{ push(parts, meta_repr(bargs(i))) },
         var s = "",
         (0:len(parts)) = i{
             i > 0: s = s + " ",
@@ -112,22 +121,31 @@ var call_builtin = (name, args){
         print(s),
         :: ok_sig(none)
     },
-    name == "len":     { :: ok_sig(len(args(0))) },
-    name == "str":     { :: ok_sig(meta_repr(args(0))) },
-    name == "num":     { :: ok_sig(num(str(args(0)))) },
-    name == "type":    { :: ok_sig(type(args(0))) },
-    name == "floor":   { :: ok_sig(floor(args(0))) },
-    name == "push":    { push(args(0), args(1)), :: ok_sig(args(0)) },
-    name == "pop":     { :: ok_sig(pop(args(0))) },
+    name == "len":     { :: ok_sig(len(bargs(0))) },
+    name == "str":     { :: ok_sig(meta_repr(bargs(0))) },
+    name == "num":     { :: ok_sig(num(str(bargs(0)))) },
+    name == "type":    { :: ok_sig(type(bargs(0))) },
+    name == "floor":   { :: ok_sig(floor(bargs(0))) },
+    name == "push":    { push(bargs(0), bargs(1)), :: ok_sig(bargs(0)) },
+    name == "pop":     { :: ok_sig(pop(bargs(0))) },
     name == "list":    { :: ok_sig(list()) },
     name == "map":     { :: ok_sig(map()) },
-    name == "keys":    { :: ok_sig(keys(args(0))) },
-    name == "has_key": { :: ok_sig(has_key(args(0), args(1))) },
-    name == "set_key": { set_key(args(0), args(1), args(2)), :: ok_sig(args(2)) },
-    name == "get_key": { :: ok_sig(get_key(args(0), args(1))) },
-    name == "ask":     { :: ok_sig(ask(args(0))) },
-    name == "args":    { :: ok_sig(args()) },
-    name == "read":    { :: ok_sig(read(args(0))) },
+    name == "keys":    { :: ok_sig(keys(bargs(0))) },
+    name == "has_key": { :: ok_sig(has_key(bargs(0), bargs(1))) },
+    name == "set_key": { set_key(bargs(0), bargs(1), bargs(2)), :: ok_sig(bargs(2)) },
+    name == "get_key": { :: ok_sig(get_key(bargs(0), bargs(1))) },
+    name == "ask":     { :: ok_sig(ask(bargs(0))) },
+    name == "args":   { :: ok_sig(args()) },
+    name == "dirof":         { :: ok_sig(dirof(bargs(0))) },
+    name == "_resolve_how":        { :: ok_sig(_resolve_how(bargs(0))) },
+    name == "_push_import_dir": { :: ok_sig(_push_import_dir(bargs(0))) },
+    name == "__get_meta_dir": { :: ok_sig(__get_meta_dir()) },
+    name == "_lex":    { :: ok_sig(_lex(bargs(0))) },
+    name == "_host_call":  { :: ok_sig(_host_call(bargs(0), bargs(1))) },
+    name == "_meta_lex":   { :: ok_sig(_meta_lex(bargs(0))) },
+    name == "_meta_parse": { :: ok_sig(_meta_parse(bargs(0))) },
+    name == "_parse":  { :: ok_sig(_parse(bargs(0))) },
+    name == "read":    { :: ok_sig(read(bargs(0))) },
     :: ok_sig(none)
 }
 
@@ -291,6 +309,10 @@ eval_node = (node, env){
             has_key(callee, args(0)): { :: ok_sig(get_key(callee, args(0))) },
             :: ok_sig(none)
         },
+        # HOST function (HowFunction object) — call via host dispatch
+        type(callee) == "function": {
+            :: ok_sig(_host_call(callee, args))
+        },
         :: ok_sig(none)
     },
 
@@ -325,6 +347,40 @@ eval_node = (node, env){
         :: ok_sig(m)
     },
 
+    tag == "how_stmt": {
+        var mod_name = node("name"),
+        var mod_path = _resolve_how(mod_name),
+        var mod_src  = read(mod_path),
+        # Resolve _lex and _parse from env so meta versions can override builtins
+        var lex_fn   = env_get(env, "_lex"),
+        var parse_fn = env_get(env, "_parse"),
+        # Call them: call_fn handles both closures and builtins
+        var lex_args   = list(),
+        push(lex_args, mod_src),
+        var r_lex      = call_fn(lex_fn, lex_args),
+        r_lex("sig") != "ok" :: r_lex,
+        var mod_tokens = r_lex("val"),
+        var parse_args = list(),
+        push(parse_args, mod_tokens),
+        var r_parse    = call_fn(parse_fn, parse_args),
+        r_parse("sig") != "ok" :: r_parse,
+        var mod_ast    = r_parse("val"),
+        # Run the module in a fresh env that also has _lex/_parse overrides
+        var mod_g    = make_globals(),
+        set_key(mod_g("vars"), "_lex",   lex_fn),
+        set_key(mod_g("vars"), "_parse", parse_fn),
+        var mod_env  = env_new(mod_g),
+        eval_node(mod_ast, mod_env),
+        # Expose all module vars as a map
+        var mod_map  = map(),
+        var mod_keys = keys(mod_env("vars")),
+        var ki = 0,
+        (0:len(mod_keys)) = ki{
+            set_key(mod_map, mod_keys(ki), get_key(mod_env("vars"), mod_keys(ki)))
+        },
+        env_set(env, mod_name, mod_map),
+        :: ok_sig(mod_map)
+    },
     tag == "var_decl": {
         var r = eval_node(node("val"), env),
         r("sig") != "ok" :: r,
@@ -334,6 +390,90 @@ eval_node = (node, env){
 
     tag == "block": {
         :: eval_block(node("stmts"), env)
+    },
+
+    tag == "for_loop": {
+        var start_r  = none,
+        node("start") != none: start_r = eval_node(node("start"), env),
+        var start_v  = 0,
+        start_r != none and start_r("sig") == "ok": start_v = floor(start_r("val")),
+        var stop_r   = eval_node(node("stop"), env),
+        stop_r("sig") != "ok" :: stop_r,
+        var stop_v   = floor(stop_r("val")),
+        var iter_var = node("var"),
+        var branches = node("branches"),
+        var loop_i   = start_v,
+        var loop_res = ok_sig(none),
+        var for_done = false,
+        (:)={
+            for_done: break,
+            loop_i >= stop_v: { for_done = true },
+            loop_i < stop_v: {
+                env_set(env, iter_var, loop_i),
+                var bi = 0,
+                var iter_done = false,
+                (:)={
+                    iter_done: break,
+                    bi >= len(branches): { iter_done = true },
+                    bi < len(branches): {
+                        var b = branches(bi),
+                        b("tag") == "var_decl": {
+                            var r = eval_node(b("val"), env),
+                            r("sig") == "ok": env_set(env, b("name"), r("val")),
+                            bi = bi + 1
+                        },
+                        b("tag") == "branch": {
+                            var cond = b("cond"),
+                            var cond_ok = true,
+                            cond != none: {
+                                var rc = eval_node(cond, env),
+                                rc("sig") != "ok": { loop_res = rc, for_done = true, iter_done = true, cond_ok = false },
+                                rc("sig") == "ok" and is_truthy(rc("val")) == false: { cond_ok = false }
+                            },
+                            cond_ok and b("is_ret") == false: {
+                                var rb = eval_node(b("body"), env),
+                                rb("sig") == "break": { for_done = true, iter_done = true },
+                                rb("sig") == "return": { loop_res = rb, for_done = true, iter_done = true },
+                                rb("sig") == "ok": bi = bi + 1
+                            },
+                            cond_ok and b("is_ret"): {
+                                # :: branch runs once after all iterations (post-loop return)
+                                # Don't evaluate here — save for after loop
+                                bi = bi + 1
+                            },
+                            cond_ok == false: { bi = bi + 1 }
+                        },
+                        b("tag") != "var_decl" and b("tag") != "branch": { bi = bi + 1 }
+                    }
+                },
+                for_done == false: loop_i = loop_i + 1
+            }
+        },
+        # Run post-loop :: branches
+        loop_res("sig") == "ok": {
+            var bi2 = 0,
+            (:)={
+                bi2 >= len(branches): break,
+                var b = branches(bi2),
+                b("tag") == "branch" and b("is_ret"): {
+                    var cond2 = b("cond"),
+                    var cond2_ok = true,
+                    cond2 != none: {
+                        var rc2 = eval_node(cond2, env),
+                        rc2("sig") != "ok": { loop_res = rc2, bi2 = len(branches), cond2_ok = false },
+                        rc2("sig") == "ok" and is_truthy(rc2("val")) == false: { cond2_ok = false }
+                    },
+                    cond2_ok: {
+                        var rb2 = eval_node(b("body"), env),
+                        loop_res = ok_sig(rb2("val")),
+                        bi2 = len(branches)
+                    },
+                    cond2_ok == false: { bi2 = bi2 + 1 }
+                },
+                b("tag") != "branch" or b("is_ret") == false: { bi2 = bi2 + 1 }
+            }
+        },
+        :: loop_res
     },
 
     tag == "prog": {
@@ -420,6 +560,10 @@ eval_branches = (branches, env){
 
 # ── Function call ─────────────────────────────────────────────────────────────
 call_fn = (fn, args){
+    # Dispatch builtins (e.g. {tag:"builtin", name:"_lex"})
+    type(fn) == "map" and has_key(fn, "tag") and fn("tag") == "builtin": {
+        :: call_builtin(fn("name"), args)
+    },
     fn("is_loop"): {
         # Unbounded loop
         var local = env_new(fn("env")),

@@ -560,6 +560,11 @@ p_block = (st){
 
 # ── Statement ─────────────────────────────────────────────────────────────────
 var p_stmt = (st){
+    st_cur(st)("t") == "HOW": {
+        var st2 = st_adv(st),
+        var name = st_cur(st2)("v"),
+        :: {"node": nd("how_stmt", {"name": name}), "st": st_adv(st2)}
+    },
     st_cur(st)("t") == "VAR": {
         var st2  = st_adv(st),
         var name = st_cur(st2)("v"),
