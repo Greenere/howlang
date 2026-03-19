@@ -1,0 +1,307 @@
+var TOTAL = 0
+var PASSED = 0
+
+var line = (){
+    print("----------------------------------------")
+}
+
+var pass = (name){
+    TOTAL += 1,
+    PASSED += 1,
+    print("PASS: " + name)
+}
+
+var fail = (name, actual, expected){
+    TOTAL += 1,
+    print("FAIL: " + name + " | got=" + str(actual) + " expected=" + str(expected))
+}
+
+var assert_eq = (name, actual, expected){
+    actual == expected : pass(name),
+    actual != expected : fail(name, actual, expected)
+}
+
+print("=== HOWLANG self-check test suite ===")
+line()
+
+# --------------------------------------------------
+# Test 1: closure captures outer variable
+# --------------------------------------------------
+var make_adder = (base){
+    :: (x){
+        :: base + x
+    }
+}
+var add10 = make_adder(10)
+assert_eq("closure add10(5)", add10(5), 15)
+assert_eq("closure add10(-2)", add10(-2), 8)
+
+# --------------------------------------------------
+# Test 2: closure sees latest outer mutation
+# --------------------------------------------------
+var x = 1
+var f = (){
+    :: x
+}
+assert_eq("closure initial outer read", f(), 1)
+x = 99
+assert_eq("closure updated outer read", f(), 99)
+
+# --------------------------------------------------
+# Test 3: nested branch blocks
+# --------------------------------------------------
+var classify = (n){
+    var out = "start",
+    n > 0: {
+        out = "positive",
+        n > 10: {
+            out = out + "-big"
+        },
+        n <= 10: {
+            out = out + "-small"
+        }
+    },
+    n == 0: {
+        out = "zero"
+    },
+    n < 0: {
+        out = "negative"
+    },
+    :: out
+}
+assert_eq("nested branch positive-big", classify(20), "positive-big")
+assert_eq("nested branch positive-small", classify(3), "positive-small")
+assert_eq("nested branch zero", classify(0), "zero")
+assert_eq("nested branch negative", classify(-4), "negative")
+
+# --------------------------------------------------
+# Test 4: (:)= explicit-break loop side effects
+# --------------------------------------------------
+var i = 0
+var total = 0
+(:)={
+    i >= 5: break,
+    total += i,
+    i += 1
+}
+assert_eq("break loop final i", i, 5)
+assert_eq("break loop sum", total, 10)
+
+# --------------------------------------------------
+# Test 5: for-range loop post-loop return
+# --------------------------------------------------
+var total2 = 0
+var result = (0:5) = j{
+    total2 += j,
+    :: total2
+}
+assert_eq("for-range accumulated total", total2, 10)
+assert_eq("for-range post-loop return", result, 10)
+
+# --------------------------------------------------
+# Test 6: list(), push(), pop()
+# --------------------------------------------------
+var xs = list()
+push(xs, 10)
+push(xs, 20)
+push(xs, 30)
+assert_eq("list len after pushes", len(xs), 3)
+assert_eq("list pop returns last", pop(xs), 30)
+assert_eq("list len after pop", len(xs), 2)
+assert_eq("list first element", xs(0), 10)
+assert_eq("list second element", xs(1), 20)
+
+# --------------------------------------------------
+# Test 7: map mutation helpers
+# --------------------------------------------------
+var m = {"name": "Haoyang"}
+assert_eq("map has existing key", has_key(m, "name"), true)
+assert_eq("map missing key", has_key(m, "age"), false)
+set_key(m, "age", 30)
+assert_eq("map get inserted key", get_key(m, "age"), 30)
+del_key(m, "name")
+assert_eq("map deleted key gone", has_key(m, "name"), false)
+assert_eq("map len after delete", len(m), 1)
+
+# --------------------------------------------------
+# Test 8: class method mutates instance field
+# --------------------------------------------------
+var counter = [start]{
+    value: start,
+    inc: (){
+        value += 1
+    },
+    add: (n){
+        value += n
+    },
+    get: (){
+        :: value
+    }
+}
+var c = counter[5]
+assert_eq("class initial field", c.get(), 5)
+c.inc()
+assert_eq("class inc method", c.get(), 6)
+c.add(10)
+assert_eq("class add method", c.get(), 16)
+
+# --------------------------------------------------
+# Test 9: instances do not share state
+# --------------------------------------------------
+var counter2 = [start]{
+    value: start,
+    inc: (){
+        value += 1
+    },
+    get: (){
+        :: value
+    }
+}
+var a = counter2[1]
+var b = counter2[100]
+a.inc()
+a.inc()
+b.inc()
+assert_eq("instance A isolated state", a.get(), 3)
+assert_eq("instance B isolated state", b.get(), 101)
+
+# --------------------------------------------------
+# Test 10: anonymous function literals inside map
+# --------------------------------------------------
+var funmap = {
+    "answer": { :: 42 },
+    "double": (n){ :: n * 2 }
+}
+assert_eq("map anonymous zero-arg function", funmap("answer")(), 42)
+assert_eq("map stored function with arg", funmap("double")(9), 18)
+
+# --------------------------------------------------
+# Test 11: frequency count with map + loop
+# --------------------------------------------------
+var freq = (items){
+    var out = {},
+    var k = 0,
+    :: (:){
+        k >= len(items) :: out,
+        has_key(out, items(k)): {
+            set_key(out, items(k), get_key(out, items(k)) + 1)
+        },
+        not has_key(out, items(k)): {
+            set_key(out, items(k), 1)
+        },
+        k += 1
+    }()
+}
+var counts = freq({"a", "b", "a", "c", "b", "a"})
+assert_eq("freq count a", get_key(counts, "a"), 3)
+assert_eq("freq count b", get_key(counts, "b"), 2)
+assert_eq("freq count c", get_key(counts, "c"), 1)
+
+# --------------------------------------------------
+# Test 12: recursive closure factory
+# --------------------------------------------------
+var make_power = (p){
+    :: (n){
+        p == 0 :: 1,
+        p == 1 :: n,
+        :: n * make_power(p - 1)(n)
+    }
+}
+var square = make_power(2)
+var cube = make_power(3)
+assert_eq("recursive closure square", square(5), 25)
+assert_eq("recursive closure cube", cube(2), 8)
+
+# --------------------------------------------------
+# Test 13: list mutation through set_key / get_key
+# --------------------------------------------------
+var arr = {5, 6, 7}
+assert_eq("list read before set_key", arr(1), 6)
+set_key(arr, 1, 99)
+assert_eq("list read after set_key", arr(1), 99)
+assert_eq("list get_key oob returns none", get_key(arr, 10), none)
+
+# --------------------------------------------------
+# Test 14: keys() and values()
+# --------------------------------------------------
+var obj = {"x": 7, "y": 9}
+var ks = keys(obj)
+var vs = values(obj)
+assert_eq("keys len", len(ks), 2)
+assert_eq("values len", len(vs), 2)
+assert_eq("keys type", type(ks), "list")
+assert_eq("values type", type(vs), "list")
+
+# --------------------------------------------------
+# Test 15: string coercion in +
+# --------------------------------------------------
+assert_eq("string + number coercion", "value=" + 123, "value=123")
+assert_eq("string + bool coercion", "flag=" + true, "flag=true")
+
+# --------------------------------------------------
+# Test 16: range builtin + accumulation
+# --------------------------------------------------
+var r = range(1, 6)
+var idx = 0
+var sumr = 0
+(:)={
+    idx >= len(r): break,
+    sumr += r(idx),
+    idx += 1
+}
+assert_eq("range sum 1..5", sumr, 15)
+
+# --------------------------------------------------
+# Test 17: branch with block temp logic
+# --------------------------------------------------
+var score = (n){
+    n < 0 :: "bad",
+    n >= 0: {
+        var tag = "small",
+        n >= 10: {
+            tag = "big"
+        },
+        :: tag
+    }
+}
+assert_eq("branch temp negative", score(-1), "bad")
+assert_eq("branch temp small", score(3), "small")
+assert_eq("branch temp big", score(20), "big")
+
+# --------------------------------------------------
+# Test 18: tree traversal integration
+# --------------------------------------------------
+var node = [val, left, right, leaf]{
+    val: val,
+    left: left,
+    right: right,
+    leaf: leaf
+}
+var root = node[0,
+    node[1, none, none, true],
+    node[2, none, none, true],
+    false]
+var traverse = (n){
+    n == none :: {},
+    n.leaf :: {n.val},
+    :: traverse(n.left) + {n.val} + traverse(n.right)
+}
+var res = traverse(root)
+assert_eq("tree traversal first", res(0), 1)
+assert_eq("tree traversal second", res(1), 0)
+assert_eq("tree traversal third", res(2), 2)
+
+# --------------------------------------------------
+# Test 19: list equality
+# --------------------------------------------------
+assert_eq("list equality same", {1,2,3} == {1,2,3}, true)
+assert_eq("list equality diff", {1,2,3} == {1,2,4}, false)
+
+# --------------------------------------------------
+# Test 20: map equality
+# --------------------------------------------------
+assert_eq("map equality same", {"a":1, "b":2} == {"a":1, "b":2}, true)
+assert_eq("map equality diff", {"a":1} == {"a":2}, false)
+
+
+print("FINAL: " + str(PASSED) + "/" + str(TOTAL) + " passed")
