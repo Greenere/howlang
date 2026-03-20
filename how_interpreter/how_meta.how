@@ -101,9 +101,23 @@ var meta_repl = (){
 #   argv = ["how_meta.how", "x.how"]  → script at argv(1) → run it
 
 (){
-    # argv(0) = this interpreter file, argv(1) = script to run (if any)
+    # argv(0) = interpreter itself
+    # argv(1) = first script; argv(2+) = extra files to concat (lib + test pattern)
     var argv = args(),
     var has_script = argv != none and len(argv) >= 2,
+    # Multi-file: concatenate all scripts (e.g. lru_cache.how lru_cache_test.how)
+    has_script and len(argv) >= 3: {
+        var combined = "",
+        var ai = 1,
+        (:)={
+            ai >= len(argv): break,
+            _push_import_dir(argv(ai)),
+            combined = combined + read(argv(ai)) + "
+",
+            ai = ai + 1
+        },
+        :: meta_run(combined)
+    },
     has_script :: meta_run_file(argv(1)),
     :: meta_repl()
 }()

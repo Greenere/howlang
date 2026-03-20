@@ -201,7 +201,7 @@ p_call = (st){
     var last_line = st_cur(st)("ln"),
     # After parsing a func/class literal, allow () on any line (for (){...}() pattern)
     node != none and type(node) == "map" and has_key(node, "tag") and
-    (node("tag") == "func"): {
+    (node("tag") == "func" or node("tag") == "class_def"): {
         last_line = st_cur(st2)("ln")
     },
     (:)={
@@ -275,6 +275,27 @@ p_call = (st){
             }
             }   # end st_cur(st3)("t") != "RPAREN" block
         },
+        # Bracket call: expr[arg1, arg2, ...]  — class instantiation
+        cur("t") == "LBRACKET" and cur("ln") == last_line: {
+            var st3 = st_adv(st2),    # consume [
+            var bargs = list(),
+            var bdone = false,
+            (:)={
+                bdone: break,
+                st_cur(st3)("t") == "RBRACKET": { bdone = true },
+                st_cur(st3)("t") != "RBRACKET": {
+                    var r2 = p_expr(st3),
+                    push(bargs, r2("node")),
+                    st3 = r2("st"),
+                    st_cur(st3)("t") == "COMMA": { st3 = st_adv(st3) },
+                    st_cur(st3)("t") == "RBRACKET": { bdone = true }
+                }
+            },
+            st3 = st_adv(st3),        # consume ]
+            node = nd("call", {"callee": node, "args": bargs, "bracket": true}),
+            st2 = st3,
+            last_line = cur("ln")
+        },
         # Dot access
         cur("t") == "DOT": {
             var st3  = st_adv(st2),
@@ -284,8 +305,9 @@ p_call = (st){
             st2  = st4,
             last_line = st_cur(st4)("ln")
         },
-        cur("t") != "LPAREN" and cur("t") != "DOT": { done = true },
-        cur("t") == "LPAREN" and cur("ln") != last_line: { done = true }
+        cur("t") != "LPAREN" and cur("t") != "DOT" and cur("t") != "LBRACKET": { done = true },
+        cur("t") == "LPAREN" and cur("ln") != last_line: { done = true },
+        cur("t") == "LBRACKET" and cur("ln") != last_line: { done = true }
     },
     :: {"node": node, "st": st2}
 }
@@ -307,7 +329,31 @@ p_atom = (st){
     # { ... }  — map/list literal or branch-function
     cur("t") == "LBRACE": { :: p_map_lit(st) },
 
+    # [ params ] { body }  — class expression
+    cur("t") == "LBRACKET": { :: p_class_expr(st) },
+
     :: {"node": nd("none_lit", {}), "st": st_adv(st)}   # fallback / error recovery
+}
+
+# ── Class expression  [ params ] { branches } ─────────────────────────────────
+var p_class_expr = (st){
+    var st2 = st_adv(st),          # consume [
+    var params = list(),
+    # parse comma-separated IDENT params until ]
+    (:)={
+        st_cur(st2)("t") == "RBRACKET": break,
+        st_cur(st2)("t") == "IDENT": {
+            push(params, st_cur(st2)("v")),
+            st2 = st_adv(st2)
+        },
+        st_cur(st2)("t") == "COMMA": { st2 = st_adv(st2) },
+        st_cur(st2)("t") != "RBRACKET" and st_cur(st2)("t") != "IDENT" and
+        st_cur(st2)("t") != "COMMA": break
+    },
+    st2 = st_adv(st2),             # consume ]
+    var rb = p_func_body(st2),
+    :: {"node": nd("class_def", {"params": params, "branches": rb("branches")}),
+        "st": rb("st")}
 }
 
 # ── Function / loop / group starting with ( ───────────────────────────────────

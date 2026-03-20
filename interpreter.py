@@ -379,7 +379,8 @@ class Interpreter:
                 return HowMap({'tag': 'assign', 'target': _py_ast_to_howmap(node.target), 'op': node.op, 'val': _py_ast_to_howmap(node.value)})
             if isinstance(node, AN.Call):
                 args = HowList([_py_ast_to_howmap(a) for a in node.args])
-                return HowMap({'tag': 'call', 'callee': _py_ast_to_howmap(node.callee), 'args': args})
+                return HowMap({'tag': 'call', 'callee': _py_ast_to_howmap(node.callee), 'args': args,
+                               'bracket': node.bracket})
             if isinstance(node, AN.Slice):
                 start = _py_ast_to_howmap(node.start) if node.start else None
                 stop = _py_ast_to_howmap(node.stop) if node.stop else None
@@ -402,6 +403,10 @@ class Interpreter:
                 return HowMap({'tag': 'map_lit', 'items': items})
             if isinstance(node, AN.BreakLoop):
                 return HowMap({'tag': 'break_node'})
+            if isinstance(node, AN.ClassExpr):
+                params = HowList(list(node.params))
+                branches = HowList([_py_ast_to_howmap(b) for b in node.branches])
+                return HowMap({'tag': 'class_def', 'params': params, 'branches': branches})
             if isinstance(node, AN.ImportStmt):
                 return HowMap({'tag': 'how_stmt', 'name': node.module})
             if isinstance(node, AN.ForLoop):

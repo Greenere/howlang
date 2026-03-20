@@ -63,9 +63,8 @@ var call_fn       = none
 
 # ── Value display ─────────────────────────────────────────────────────────────
 var meta_repr = (v){
-    v == none  :: "none",
-    v == true  :: "true",
-    v == false :: "false",
+    v == none            :: "none",
+    type(v) == "bool"    :: str(v),
     type(v) == "number": {
         v == floor(v) :: str(floor(v)),
         :: str(v)
@@ -93,6 +92,8 @@ var make_globals = (){
     env_set(g, "args",     {"tag": "builtin", "name": "args"}),
     env_set(g, "dirof",    {"tag": "builtin", "name": "dirof"}),
     env_set(g, "_resolve_how",        {"tag": "builtin", "name": "_resolve_how"}),
+    env_set(g, "del_key",    {"tag": "builtin", "name": "del_key"}),
+    env_set(g, "values",     {"tag": "builtin", "name": "values"}),
     env_set(g, "_push_import_dir", {"tag": "builtin", "name": "_push_import_dir"}),
     # __dir is injected by how_meta.how after loading
     env_set(g, "_lex",     {"tag": "builtin", "name": "_meta_lex"}),
@@ -124,7 +125,13 @@ var call_builtin = (name, bargs){
     name == "len":     { :: ok_sig(len(bargs(0))) },
     name == "str":     { :: ok_sig(meta_repr(bargs(0))) },
     name == "num":     { :: ok_sig(num(str(bargs(0)))) },
-    name == "type":    { :: ok_sig(type(bargs(0))) },
+    name == "type": {
+        var tv = bargs(0),
+        type(tv) == "map" and has_key(tv, "tag") and tv("tag") == "instance": {
+            :: ok_sig("instance")
+        },
+        :: ok_sig(type(tv))
+    },
     name == "floor":   { :: ok_sig(floor(bargs(0))) },
     name == "push":    { push(bargs(0), bargs(1)), :: ok_sig(bargs(0)) },
     name == "pop":     { :: ok_sig(pop(bargs(0))) },
@@ -138,6 +145,8 @@ var call_builtin = (name, bargs){
     name == "args":   { :: ok_sig(args()) },
     name == "dirof":         { :: ok_sig(dirof(bargs(0))) },
     name == "_resolve_how":        { :: ok_sig(_resolve_how(bargs(0))) },
+    name == "del_key":  { del_key(bargs(0), bargs(1)), :: ok_sig(none) },
+    name == "values":   { :: ok_sig(values(bargs(0))) },
     name == "_push_import_dir": { :: ok_sig(_push_import_dir(bargs(0))) },
     name == "__get_meta_dir": { :: ok_sig(__get_meta_dir()) },
     name == "_lex":    { :: ok_sig(_lex(bargs(0))) },
@@ -232,8 +241,18 @@ eval_node = (node, env){
         tgt("tag") == "dot": {
             var objr = eval_node(tgt("obj"), env),
             objr("sig") != "ok" :: objr,
-            set_key(objr("val"), tgt("attr"), rv("val")),
-            :: ok_sig(rv("val"))
+            var da_obj = objr("val"),
+            # Instance: write into its fields map
+            type(da_obj) == "map" and has_key(da_obj, "tag") and
+            da_obj("tag") == "instance": {
+                set_key(da_obj("fields"), tgt("attr"), rv("val")),
+                :: ok_sig(rv("val"))
+            },
+            type(da_obj) == "map": {
+                set_key(da_obj, tgt("attr"), rv("val")),
+                :: ok_sig(rv("val"))
+            },
+            :: ok_sig(none)
         },
         :: ok_sig(none)
     },
@@ -243,7 +262,12 @@ eval_node = (node, env){
         r("sig") != "ok" :: r,
         var obj  = r("val"),
         var attr = node("attr"),
-        type(obj) == "map" or type(obj) == "instance": {
+        # Instance — read from its fields map
+        type(obj) == "map" and has_key(obj, "tag") and obj("tag") == "instance": {
+            has_key(obj("fields"), attr) :: ok_sig(get_key(obj("fields"), attr)),
+            :: ok_sig(none)
+        },
+        type(obj) == "map": {
             has_key(obj, attr) :: ok_sig(get_key(obj, attr)),
             :: ok_sig(none)
         },
@@ -302,6 +326,10 @@ eval_node = (node, env){
         },
         type(callee) == "map" and has_key(callee, "tag") and get_key(callee, "tag") == "closure": {
             :: call_fn(callee, args)
+        },
+        # Class instantiation
+        type(callee) == "map" and has_key(callee, "tag") and get_key(callee, "tag") == "class": {
+            :: instantiate_class(callee, args, env)
         },
         # Call on list/map → index
         type(callee) == "list": { :: ok_sig(callee(floor(args(0)))) },
@@ -379,6 +407,14 @@ eval_node = (node, env){
             set_key(mod_map, mod_keys(ki), get_key(mod_env("vars"), mod_keys(ki)))
         },
         env_set(env, mod_name, mod_map),
+        # Also bind each module var directly into the calling env
+        # This allows: how lru_cache → lru_cache[3] works (lru_cache var in scope)
+        # matching how the HOST binds module vars accessible via the module name
+        (0:len(mod_keys)) = ki{
+            var mvar_name = mod_keys(ki),
+            var mvar_val  = get_key(mod_map, mvar_name),
+            env_set(env, mvar_name, mvar_val)
+        },
         :: ok_sig(mod_map)
     },
     tag == "var_decl": {
@@ -476,6 +512,12 @@ eval_node = (node, env){
         :: loop_res
     },
 
+    tag == "class_def": {
+        # Build a class object capturing params, branches, and current env
+        :: ok_sig({"tag": "class", "params": node("params"),
+                    "branches": node("branches"), "env": env})
+    },
+
     tag == "prog": {
         var stmts = node("stmts"),
         var si = 0,
@@ -497,9 +539,20 @@ eval_block = (stmts, env){
     var si = 0,
     var result = ok_sig(none),
     (0:len(stmts)) = si{
-        result("sig") == "ok": {
-            var r = eval_node(stmts(si), child),
-            result = r
+        result("sig") != "ok": break,
+        var stmt = stmts(si),
+        var stag = stmt("tag"),
+        # var_decl and branch are dispatched normally through eval_node
+        # branch nodes need special eval_branches treatment (single-branch list)
+        stag == "branch": {
+            var single = list(),
+            push(single, stmt),
+            var rb = eval_branches(single, child),
+            rb("sig") != "ok": { result = rb }
+        },
+        stag != "branch": {
+            var r = eval_node(stmt, child),
+            r("sig") != "ok": { result = r }
         }
     },
     :: result
@@ -590,6 +643,71 @@ call_fn = (fn, args){
 }
 
 # ── Public entry point ────────────────────────────────────────────────────────
+# ── Class instantiation ────────────────────────────────────────────────────────
+var instantiate_class = (cls, args, outer_env){
+    var params   = cls("params"),
+    var branches = cls("branches"),
+    var cls_env  = cls("env"),
+
+    var init_env = env_new(cls_env),
+    var pi = 0,
+    (0:len(params)) = pi{
+        env_set(init_env, params(pi), args(pi))
+    },
+
+    # Collect fields and run side-effects during init
+    var fields = map(),
+    var bi = 0,
+    (0:len(branches)) = bi{
+        var b = branches(bi),
+        # var decl → local init variable
+        b("tag") == "var_decl": {
+            var r = eval_node(b("val"), init_env),
+            r("sig") == "ok": env_set(init_env, b("name"), r("val"))
+        },
+        b("tag") == "branch": {
+            var cond = b("cond"),
+            # Named field:  ident_cond: expr  (is_ret=false, cond is identifier/string)
+            cond != none and b("is_ret") == false: {
+                var key = none,
+                cond("tag") == "ident": { key = cond("name") },
+                cond("tag") == "str":   { key = cond("v") },
+                key != none: {
+                    var rv = eval_node(b("body"), init_env),
+                    rv("sig") == "ok": set_key(fields, key, rv("val"))
+                },
+                key == none: {
+                    var rc = eval_node(cond, init_env),
+                    rc("sig") == "ok" and is_truthy(rc("val")): eval_node(b("body"), init_env)
+                }
+            },
+            # Unconditional side-effect (e.g. h.next = t)
+            cond == none and b("is_ret") == false: {
+                eval_node(b("body"), init_env)
+            }
+        }
+    },
+
+    # Build instance env whose vars dict IS fields
+    # Closures that mutate "size", "store" etc. mutate the shared instance fields
+    var inst_env = {"vars": fields, "parent": init_env},
+
+    # Re-wrap method closures to close over inst_env
+    var fk = keys(fields),
+    var ki = 0,
+    (0:len(fk)) = ki{
+        var k = fk(ki),
+        var v = get_key(fields, k),
+        type(v) == "map" and has_key(v, "tag") and v("tag") == "closure": {
+            set_key(fields, k, {"tag": "closure", "params": v("params"),
+                                 "branches": v("branches"), "env": inst_env,
+                                 "is_loop": v("is_loop")})
+        }
+    },
+
+    :: ok_sig({"tag": "instance", "fields": fields, "inst_env": inst_env})
+}
+
 var meta_eval = (ast){
     var g = make_globals(),
     :: eval_node(ast, g)

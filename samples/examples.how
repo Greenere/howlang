@@ -186,7 +186,7 @@ var curry_adder = (n) {
         }
     }
 }
-print(curry_adder(1)(2)(3))
+print(curry_adder(1)(2)(curry_adder(1)(2)(3)))
 
 # ── 10. String operations ────────────────────────────────────────────────────
 print("--- Strings ---")
