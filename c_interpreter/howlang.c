@@ -2816,6 +2816,8 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
 static void exec_import(const char *modname, Env *env) {
     /* modname may be "path/to/module" (string-path form) or bare "module" */
     char bind_name[256];  /* name to bind in env = last path component */
+    strncpy(bind_name, modname, sizeof(bind_name)-1);
+    bind_name[sizeof(bind_name)-1] = 0;
     const char *slash = strrchr(modname, '/');
     if (slash) {
         /* "samples/lru_cache" -> add "samples/" to search, bind as "lru_cache" */
@@ -2900,7 +2902,14 @@ static void exec_import(const char *modname, Env *env) {
     mod->refcount = 1;
 
     Value *modval = val_new(VT_MODULE); modval->mod = mod;
-    env_set(env, modname, modval);
+    /* Bind the module itself under its name (e.g. lru_cache -> module) */
+    env_set(env, bind_name, modval);
+    /* Also bind each exported var directly into the calling env.
+     * This means  how lru_cache  makes  lru_cache  resolve to the CLASS
+     * (same as Python interpreter behaviour). */
+    for (int i=0;i<pub_env->len;i++) {
+        env_set(env, pub_env->entries[i].key, pub_env->entries[i].val);
+    }
     val_decref(modval);
     env_decref(mod_env);
 }
