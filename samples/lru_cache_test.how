@@ -29,7 +29,7 @@ var assert_none = (label, val){
 
 print("─── Basic get / put ─────────────────────────────────────────────────────")
 
-var c1 = lru_cache[3]
+var c1 = lru_cache.lru_cache[3]
 c1.put("a", 1)
 c1.put("b", 2)
 c1.put("c", 3)
@@ -43,7 +43,7 @@ assert_eq("size after 3 inserts",  c1.size_of(), 3)
 
 print("─── Eviction (LRU removed when over capacity) ───────────────────────────")
 
-var c2 = lru_cache[3]
+var c2 = lru_cache.lru_cache[3]
 c2.put("a", 1)
 c2.put("b", 2)
 c2.put("c", 3)
@@ -60,7 +60,7 @@ assert_eq("size stays at capacity",         c2.size_of(), 3)
 
 print("─── Access order updates (get promotes to MRU) ───────────────────────────")
 
-var c3 = lru_cache[3]
+var c3 = lru_cache.lru_cache[3]
 c3.put("x", 10)
 c3.put("y", 20)
 c3.put("z", 30)
@@ -81,7 +81,7 @@ assert_eq("w inserted successfully",            c3.get("w"), 40)
 
 print("─── Update existing key ─────────────────────────────────────────────────")
 
-var c4 = lru_cache[3]
+var c4 = lru_cache.lru_cache[3]
 c4.put("a", 1)
 c4.put("b", 2)
 c4.put("a", 99)   # update value for existing key
@@ -100,7 +100,7 @@ assert_eq("a survives (was MRU)",       c4.get("a"), 99)
 
 print("─── MRU→LRU order tracking ──────────────────────────────────────────────")
 
-var c5 = lru_cache[4]
+var c5 = lru_cache.lru_cache[4]
 c5.put("p", 1)
 c5.put("q", 2)
 c5.put("r", 3)
@@ -125,7 +125,7 @@ assert_eq("after get(q): LRU is p",   ord2(3), "p")
 
 print("─── Capacity 1 edge case ────────────────────────────────────────────────")
 
-var c6 = lru_cache[1]
+var c6 = lru_cache.lru_cache[1]
 c6.put("only", 42)
 assert_eq("capacity-1 get",     c6.get("only"), 42)
 c6.put("new", 99)
@@ -136,7 +136,7 @@ assert_eq("capacity-1 size is 1",            c6.size_of(), 1)
 
 print("─── Repeated access to same key (stress) ────────────────────────────────")
 
-var c7 = lru_cache[2]
+var c7 = lru_cache.lru_cache[2]
 c7.put("m", 1)
 c7.put("n", 2)
 
@@ -153,7 +153,7 @@ assert_eq("o inserted",     c7.get("o"), 3)
 
 print("─── peek does not affect order ──────────────────────────────────────────")
 
-var c8 = lru_cache[3]
+var c8 = lru_cache.lru_cache[3]
 c8.put("a", 1)
 c8.put("b", 2)
 c8.put("c", 3)

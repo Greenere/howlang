@@ -41,16 +41,22 @@ var _pq_sift_up = (heap, i){
     }
 }
 
+var _pq_min_child = (heap, i, sz){
+    var l = _pq_left(i),
+    var r = _pq_right(i),
+    var s = i,
+    # Sequential: check l then check r against updated s
+    l <= sz and heap(l).pri < heap(s).pri: { s = l },
+    r <= sz and heap(r).pri < heap(s).pri: { s = r },
+    :: s
+}
+
 var _pq_sift_down = (heap, i, sz){
     (:)={
-        var l = _pq_left(i),
-        var r = _pq_right(i),
-        var smallest = i,
-        l <= sz and heap(l).pri < heap(smallest).pri: smallest = l,
-        r <= sz and heap(r).pri < heap(smallest).pri: smallest = r,
-        smallest == i: break,
-        _pq_swap(heap, i, smallest),
-        i = smallest
+        var s = _pq_min_child(heap, i, sz),
+        s == i: break,
+        _pq_swap(heap, i, s),
+        i = s
     }
 }
 
