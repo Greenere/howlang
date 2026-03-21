@@ -29,7 +29,9 @@ var meta_make_globals = how_eval.make_globals
 var meta_run = (source){
     var tokens = how_lexer.tokenise(source),
     var ast    = how_parser.parse(tokens),
-    :: how_eval.meta_eval(ast)
+    # Always use meta_eval_ex so the real lex/parse are injected into the meta-env.
+    # This works for both Python and C interpreters.
+    :: how_eval.meta_eval_ex(ast, how_lexer.tokenise, how_parser.parse)
 }
 
 # Run source inside an existing environment (for REPL persistent state)

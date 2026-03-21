@@ -361,13 +361,108 @@ p_func_grp = (st){
     var st2 = st_adv(st),          # consume (
     var result = none,
 
-    # (:) — unbounded loop
+    # (:) or (:)= — unbounded loop. (:)= means auto-call (wrap in a call node)
     result == none and st_cur(st2)("t") == "COLON" and st_peek(st2,1)("t") == "RPAREN": {
         var st3 = st_adv(st_adv(st2)),
+        # Check for = (auto-call form): consume it
+        var auto_call = st_cur(st3)("t") == "EQ",
+        auto_call: { st3 = st_adv(st3) },
         var r   = p_func_body(st3),
-        result  = {"node": nd("func", {"params": list(), "branches": r("branches"), "is_loop": true}), "st": r("st")}
+        var fn_node = nd("func", {"params": list(), "branches": r("branches"), "is_loop": true}),
+        # Auto-call: wrap in call(fn, args=[]) so it executes immediately
+        auto_call: {
+            result = {"node": nd("call", {"callee": fn_node, "args": list(), "bracket": false}), "st": r("st")}
+        },
+        auto_call == false: {
+            result = {"node": fn_node, "st": r("st")}
+        }
     },
 
+    # (start:stop) = var { body }  — for-range loop
+    # Lookahead: scan forward for COLON at depth=0, then RPAREN EQ IDENT LBRACE
+    result == none and st_cur(st2)("t") != "COLON" and st_cur(st2)("t") != "RPAREN": {
+        var toks_fr = st2("tokens"),
+        var pos_fr  = st2("pos"),
+        var depth_fr  = 0,
+        var found_col = false,
+        var found_rp  = false,
+        var found_eq  = false,
+        var found_id  = false,
+        var found_lb  = false,
+        var fr_abort  = false,
+        var fr_done   = false,
+        (:)={
+            fr_done or fr_abort: break,
+            pos_fr >= len(toks_fr): { fr_abort = true },
+            toks_fr(pos_fr)("t") == "EOF": { fr_abort = true },
+            toks_fr(pos_fr)("t") == "LPAREN" or toks_fr(pos_fr)("t") == "LBRACKET": {
+                depth_fr = depth_fr + 1, pos_fr = pos_fr + 1
+            },
+            toks_fr(pos_fr)("t") == "RPAREN" and depth_fr > 0: {
+                depth_fr = depth_fr - 1, pos_fr = pos_fr + 1
+            },
+            toks_fr(pos_fr)("t") == "RBRACE" and depth_fr > 0: {
+                depth_fr = depth_fr - 1, pos_fr = pos_fr + 1
+            },
+            depth_fr == 0 and found_col == false and toks_fr(pos_fr)("t") == "COLON": {
+                found_col = true, pos_fr = pos_fr + 1
+            },
+            depth_fr == 0 and found_col and found_rp == false and toks_fr(pos_fr)("t") == "RPAREN": {
+                found_rp = true, pos_fr = pos_fr + 1
+            },
+            depth_fr == 0 and found_rp and found_eq == false and toks_fr(pos_fr)("t") == "EQ": {
+                found_eq = true, pos_fr = pos_fr + 1
+            },
+            depth_fr == 0 and found_eq and found_id == false and toks_fr(pos_fr)("t") == "IDENT": {
+                found_id = true, pos_fr = pos_fr + 1
+            },
+            depth_fr == 0 and found_id and toks_fr(pos_fr)("t") == "LBRACE": {
+                found_lb = true, fr_done = true
+            },
+            # abort conditions
+            depth_fr == 0 and found_rp and found_eq == false and toks_fr(pos_fr)("t") != "EQ": { fr_abort = true },
+            depth_fr == 0 and found_eq and found_id == false and toks_fr(pos_fr)("t") != "IDENT": { fr_abort = true },
+            depth_fr == 0 and found_id and toks_fr(pos_fr)("t") != "LBRACE": { fr_abort = true },
+            # abort: ) at depth 0 before finding : means this is not a for-range
+            depth_fr == 0 and found_col == false and toks_fr(pos_fr)("t") == "RPAREN": { fr_abort = true },
+            # skip depth-0 expression tokens while scanning for colon/rparen
+            depth_fr == 0 and found_col == false and
+            toks_fr(pos_fr)("t") != "COLON" and toks_fr(pos_fr)("t") != "RPAREN" and
+            toks_fr(pos_fr)("t") != "LPAREN" and toks_fr(pos_fr)("t") != "LBRACKET": {
+                pos_fr = pos_fr + 1
+            },
+            depth_fr == 0 and found_col and found_rp == false and
+            toks_fr(pos_fr)("t") != "RPAREN" and
+            toks_fr(pos_fr)("t") != "LPAREN" and toks_fr(pos_fr)("t") != "LBRACKET": {
+                pos_fr = pos_fr + 1
+            },
+            # Catch-all: advance past any token at depth > 0 that wasn't handled above
+            depth_fr > 0 and
+            toks_fr(pos_fr)("t") != "LPAREN" and toks_fr(pos_fr)("t") != "LBRACKET" and
+            toks_fr(pos_fr)("t") != "RPAREN" and toks_fr(pos_fr)("t") != "RBRACKET" and
+            toks_fr(pos_fr)("t") != "RBRACE": {
+                pos_fr = pos_fr + 1
+            }
+        },
+        found_lb: {
+            var re        = p_expr(st2),
+            var start_nd  = re("node"),
+            var st_after  = st_adv(re("st")),   # consume :
+            var re2       = p_expr(st_after),
+            var stop_nd   = re2("node"),
+            var st3       = st_adv(re2("st")),  # consume )
+            var st4       = st_adv(st3),        # consume =
+            var ivar      = st_cur(st4)("v"),
+            var st5       = st_adv(st4),        # consume ident
+            var rb        = p_func_body(st5),
+            result = {"node": nd("for_loop", {
+                "var": ivar, "start": start_nd, "stop": stop_nd,
+                "branches": rb("branches")
+            }), "st": rb("st")}
+        }
+    }
+    # () — empty params function
+    # () — empty params function
     # () — empty params function
     result == none and st_cur(st2)("t") == "RPAREN": {
         var st3 = st_adv(st2),
@@ -608,8 +703,14 @@ p_block = (st){
 var p_stmt = (st){
     st_cur(st)("t") == "HOW": {
         var st2 = st_adv(st),
-        var name = st_cur(st2)("v"),
-        :: {"node": nd("how_stmt", {"name": name}), "st": st_adv(st2)}
+        # Support: how ident  OR  how "path/to/module"
+        var mod_path = st_cur(st2)("v"),
+        :: {"node": nd("how_stmt", {"name": mod_path}), "st": st_adv(st2)}
+    },
+    st_cur(st)("t") == "WHERE": {
+        var st2 = st_adv(st),
+        var dir_path = st_cur(st2)("v"),
+        :: {"node": nd("where_stmt", {"path": dir_path}), "st": st_adv(st2)}
     },
     st_cur(st)("t") == "VAR": {
         var st2  = st_adv(st),
@@ -618,8 +719,8 @@ var p_stmt = (st){
         var r    = p_expr(st3),
         :: {"node": nd("var_decl", {"name": name, "val": r("node")}), "st": r("st")}
     },
-    var r = p_expr(st),
-    :: {"node": r("node"), "st": r("st")}
+    # Delegate to p_branch so "cond: body" and ":: expr" work at statement level
+    :: p_branch(st)
 }
 
 # ── Program ───────────────────────────────────────────────────────────────────

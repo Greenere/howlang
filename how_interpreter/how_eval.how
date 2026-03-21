@@ -95,6 +95,12 @@ var make_globals = (){
     env_set(g, "del_key",    {"tag": "builtin", "name": "del_key"}),
     env_set(g, "values",     {"tag": "builtin", "name": "values"}),
     env_set(g, "_push_import_dir", {"tag": "builtin", "name": "_push_import_dir"}),
+    env_set(g, "_dirname",        {"tag": "builtin", "name": "_dirname"}),
+    env_set(g, "_basename",       {"tag": "builtin", "name": "_basename"}),
+    env_set(g, "_add_search_dir", {"tag": "builtin", "name": "_add_search_dir"}),
+    env_set(g, "_add_search_dir", {"tag": "builtin", "name": "_add_search_dir"}),
+    env_set(g, "_basename",      {"tag": "builtin", "name": "_basename"}),
+    env_set(g, "_dirname",       {"tag": "builtin", "name": "_dirname"}),
     # __dir is injected by how_meta.how after loading
     env_set(g, "_lex",     {"tag": "builtin", "name": "_meta_lex"}),
     env_set(g, "_host_call",  {"tag": "builtin", "name": "_host_call"}),
@@ -104,6 +110,14 @@ var make_globals = (){
     env_set(g, "read",     {"tag": "builtin", "name": "read"}),
     env_set(g, "set_key",  {"tag": "builtin", "name": "set_key"}),
     env_set(g, "get_key",  {"tag": "builtin", "name": "get_key"}),
+    env_set(g, "range",  {"tag": "builtin", "name": "range"}),
+    env_set(g, "abs",    {"tag": "builtin", "name": "abs"}),
+    env_set(g, "ceil",   {"tag": "builtin", "name": "ceil"}),
+    env_set(g, "sqrt",   {"tag": "builtin", "name": "sqrt"}),
+    env_set(g, "max",    {"tag": "builtin", "name": "max"}),
+    env_set(g, "min",    {"tag": "builtin", "name": "min"}),
+    env_set(g, "bool",   {"tag": "builtin", "name": "bool"}),
+    env_set(g, "quit",   {"tag": "builtin", "name": "quit"}),
     env_set(g, "true",  true),
     env_set(g, "false", false),
     env_set(g, "none",  none),
@@ -113,12 +127,9 @@ var make_globals = (){
 var call_builtin = (name, bargs){
     name == "print": {
         var i = 0, var parts = list(),
-        (0:len(bargs)) = i{ push(parts, meta_repr(bargs(i))) },
+        var _i0=0, var _n0=len(bargs), (:)={ _i0>=_n0: break, push(parts, meta_repr(bargs(_i0))), _i0=_i0+1 },
         var s = "",
-        (0:len(parts)) = i{
-            i > 0: s = s + " ",
-            s = s + parts(i)
-        },
+        var _i1=0, var _n1=len(parts), (:)={ _i1>=_n1: break, _i1>0: s=s+" ", s=s+parts(_i1), _i1=_i1+1 },
         print(s),
         :: ok_sig(none)
     },
@@ -148,6 +159,12 @@ var call_builtin = (name, bargs){
     name == "del_key":  { del_key(bargs(0), bargs(1)), :: ok_sig(none) },
     name == "values":   { :: ok_sig(values(bargs(0))) },
     name == "_push_import_dir": { :: ok_sig(_push_import_dir(bargs(0))) },
+    name == "_dirname":        { :: ok_sig(_dirname(bargs(0))) },
+    name == "_basename":       { :: ok_sig(_basename(bargs(0))) },
+    name == "_add_search_dir": { :: ok_sig(_add_search_dir(bargs(0))) },
+    name == "_add_search_dir": { :: ok_sig(_add_search_dir(bargs(0))) },
+    name == "_basename": { :: ok_sig(_basename(bargs(0))) },
+    name == "_dirname":  { :: ok_sig(_dirname(bargs(0))) },
     name == "__get_meta_dir": { :: ok_sig(__get_meta_dir()) },
     name == "_lex":    { :: ok_sig(_lex(bargs(0))) },
     name == "_host_call":  { :: ok_sig(_host_call(bargs(0), bargs(1))) },
@@ -155,6 +172,18 @@ var call_builtin = (name, bargs){
     name == "_meta_parse": { :: ok_sig(_meta_parse(bargs(0))) },
     name == "_parse":  { :: ok_sig(_parse(bargs(0))) },
     name == "read":    { :: ok_sig(read(bargs(0))) },
+    name == "range": {
+        len(bargs) == 1: { :: ok_sig(range(bargs(0))) },
+        len(bargs) == 2: { :: ok_sig(range(bargs(0), bargs(1))) },
+        :: ok_sig(range(bargs(0), bargs(1), bargs(2)))
+    },
+    name == "abs":   { :: ok_sig(abs(bargs(0))) },
+    name == "ceil":  { :: ok_sig(ceil(bargs(0))) },
+    name == "sqrt":  { :: ok_sig(sqrt(bargs(0))) },
+    name == "max":   { :: ok_sig(max(bargs(0))) },
+    name == "min":   { :: ok_sig(min(bargs(0))) },
+    name == "bool":  { :: ok_sig(bool(bargs(0))) },
+    name == "quit":  { quit() },
     :: ok_sig(none)
 }
 
@@ -310,19 +339,24 @@ eval_node = (node, env){
         var rc = eval_node(node("callee"), env),
         rc("sig") != "ok" :: rc,
         var callee = rc("val"),
-        # Evaluate args
+        # Evaluate args (use (:)= loop to avoid for_loop return signal polluting call result)
         var args = list(),
         var ai = 0,
         var arg_nodes = node("args"),
         var arg_ok = true,
-        (0:len(arg_nodes)) = ai{
+        var n_args = len(arg_nodes),
+        (:)={
+            ai >= n_args: break,
             var ra = eval_node(arg_nodes(ai), env),
             ra("sig") != "ok": { arg_ok = false },
-            ra("sig") == "ok": push(args, ra("val"))
+            ra("sig") == "ok": push(args, ra("val")),
+            ai = ai + 1
         },
         # Call
         type(callee) == "map" and has_key(callee, "tag") and get_key(callee, "tag") == "builtin": {
-            :: call_builtin(get_key(callee, "name"), args)
+            var bres2 = call_builtin(get_key(callee, "name"), args),
+                bres2("sig") == "return": { :: bres2("val") },
+                :: bres2
         },
         type(callee) == "map" and has_key(callee, "tag") and get_key(callee, "tag") == "closure": {
             :: call_fn(callee, args)
@@ -376,7 +410,24 @@ eval_node = (node, env){
     },
 
     tag == "how_stmt": {
-        var mod_name = node("name"),
+        var mod_name_raw = node("name"),
+        # If mod_name_raw contains "/" it is a path import like "samples/lru_cache".
+        # Split on last "/" to get the directory prefix and the bare module name.
+        # We implement the split using _host_call on the builtin dirof helper isn't ideal,
+        # so we use a simple Howlang string scan instead.
+        var mod_name = mod_name_raw,
+        # Handle path import: "samples/lru_cache" → add "samples" to search, bind as "lru_cache"
+        # Use _resolve_path_import(full_path) -> {dir, name} if path contains /
+        # We detect a path by trying to resolve the full string as-is first.
+        # If mod_name_raw starts with . or / or contains /, it is a path.
+        # We use _add_search_dir + _basename builtins to split it.
+        # If _basename is available, use it; otherwise fall back to full name.
+        type(_basename) == "builtin": {
+            var dir_part = _dirname(mod_name_raw),
+            var base = _basename(mod_name_raw),
+            dir_part != "": { _add_search_dir(dir_part) },
+            mod_name = base
+        },
         var mod_path = _resolve_how(mod_name),
         var mod_src  = read(mod_path),
         # Resolve _lex and _parse from env so meta versions can override builtins
@@ -403,19 +454,28 @@ eval_node = (node, env){
         var mod_map  = map(),
         var mod_keys = keys(mod_env("vars")),
         var ki = 0,
-        (0:len(mod_keys)) = ki{
-            set_key(mod_map, mod_keys(ki), get_key(mod_env("vars"), mod_keys(ki)))
+        var nk = len(mod_keys),
+        (:)={
+            ki >= nk: break,
+            set_key(mod_map, mod_keys(ki), get_key(mod_env("vars"), mod_keys(ki))),
+            ki = ki + 1
         },
         env_set(env, mod_name, mod_map),
         # Also bind each module var directly into the calling env
-        # This allows: how lru_cache → lru_cache[3] works (lru_cache var in scope)
-        # matching how the HOST binds module vars accessible via the module name
-        (0:len(mod_keys)) = ki{
-            var mvar_name = mod_keys(ki),
+        var ki2 = 0,
+        (:)={
+            ki2 >= nk: break,
+            var mvar_name = mod_keys(ki2),
             var mvar_val  = get_key(mod_map, mvar_name),
-            env_set(env, mvar_name, mvar_val)
+            env_set(env, mvar_name, mvar_val),
+            ki2 = ki2 + 1
         },
         :: ok_sig(mod_map)
+    },
+    tag == "where_stmt": {
+        # where "dir" — add directory to module search path
+        _add_search_dir(node("path")),
+        :: ok_sig(none)
     },
     tag == "var_decl": {
         var r = eval_node(node("val"), env),
@@ -473,8 +533,10 @@ eval_node = (node, env){
                                 rb("sig") == "ok": bi = bi + 1
                             },
                             cond_ok and b("is_ret"): {
-                                # :: branch runs once after all iterations (post-loop return)
-                                # Don't evaluate here — save for after loop
+                                # :: branch: evaluate each iteration; last value becomes result
+                                var rb = eval_node(b("body"), env),
+                                rb("sig") == "ok": loop_res = ok_sig(rb("val")),
+                                rb("sig") == "return": { loop_res = rb, for_done = true, iter_done = true },
                                 bi = bi + 1
                             },
                             cond_ok == false: { bi = bi + 1 }
@@ -485,30 +547,7 @@ eval_node = (node, env){
                 for_done == false: loop_i = loop_i + 1
             }
         },
-        # Run post-loop :: branches
-        loop_res("sig") == "ok": {
-            var bi2 = 0,
-            (:)={
-                bi2 >= len(branches): break,
-                var b = branches(bi2),
-                b("tag") == "branch" and b("is_ret"): {
-                    var cond2 = b("cond"),
-                    var cond2_ok = true,
-                    cond2 != none: {
-                        var rc2 = eval_node(cond2, env),
-                        rc2("sig") != "ok": { loop_res = rc2, bi2 = len(branches), cond2_ok = false },
-                        rc2("sig") == "ok" and is_truthy(rc2("val")) == false: { cond2_ok = false }
-                    },
-                    cond2_ok: {
-                        var rb2 = eval_node(b("body"), env),
-                        loop_res = ok_sig(rb2("val")),
-                        bi2 = len(branches)
-                    },
-                    cond2_ok == false: { bi2 = bi2 + 1 }
-                },
-                b("tag") != "branch" or b("is_ret") == false: { bi2 = bi2 + 1 }
-            }
-        },
+
         :: loop_res
     },
 
@@ -519,15 +558,8 @@ eval_node = (node, env){
     },
 
     tag == "prog": {
-        var stmts = node("stmts"),
-        var si = 0,
-        var result = ok_sig(none),
-        (0:len(stmts)) = si{
-            var r = eval_node(stmts(si), env),
-            r("sig") == "return" or r("sig") == "break": { result = r, si = len(stmts) },
-            r("sig") == "ok": result = r
-        },
-        :: result
+        # prog stmts are branches — use eval_branches so conditions work correctly
+        :: eval_branches(node("stmts"), env)
     },
 
     :: ok_sig(none)
@@ -573,7 +605,10 @@ eval_branches = (branches, env){
             # var_decl inside branch list
             tag == "var_decl": {
                 var r = eval_node(b("val"), env),
-                r("sig") == "ok": env_set(env, b("name"), r("val")),
+                r("sig") == "ok": {
+                    env_set(env, b("name"), r("val")),
+                    result = r    # track last declared value as result
+                },
                 bi = bi + 1
             },
 
@@ -599,13 +634,22 @@ eval_branches = (branches, env){
                         var rb = eval_node(b("body"), env),
                         rb("sig") == "break": { result = break_sig(), done = true },
                         rb("sig") == "return": { result = rb, done = true },
-                        rb("sig") == "ok": bi = bi + 1
+                        rb("sig") == "ok": {
+                            result = rb,    # keep last ok value as result
+                            bi = bi + 1
+                        }
                     }
                 },
                 cond_ok == false: { bi = bi + 1 }
             },
 
-            tag != "var_decl" and tag != "branch": { bi = bi + 1 }
+            tag != "var_decl" and tag != "branch": {
+                # Evaluate non-branch statements (for_loop, call, assign, etc.) as side effects
+                var r = eval_node(b, env),
+                # for_loop and similar return via :: loop_res — treat as side-effect (ignore return signal)
+                r("sig") == "break": { result = break_sig(), done = true },
+                r("sig") == "return" or r("sig") == "ok": { bi = bi + 1 }
+            }
         }
     },
     :: result
@@ -615,7 +659,16 @@ eval_branches = (branches, env){
 call_fn = (fn, args){
     # Dispatch builtins (e.g. {tag:"builtin", name:"_lex"})
     type(fn) == "map" and has_key(fn, "tag") and fn("tag") == "builtin": {
-        :: call_builtin(fn("name"), args)
+        var bres = call_builtin(fn("name"), args),
+        # call_builtin uses :: which creates {sig:"return", val:ok_sig(...)};
+        # unwrap the return layer so caller sees the ok_sig directly
+        bres("sig") == "return": { :: bres("val") },
+        :: bres
+    },
+    # Native host function (e.g. how_lexer.tokenise passed directly):
+    # call it using _host_call which bridges to the C interpreter
+    type(fn) == "function" or type(fn) == "builtin": {
+        :: ok_sig(_host_call(fn, args))
     },
     fn("is_loop"): {
         # Unbounded loop
@@ -710,5 +763,18 @@ var instantiate_class = (cls, args, outer_env){
 
 var meta_eval = (ast){
     var g = make_globals(),
+    :: eval_node(ast, g)
+}
+
+# meta_eval_ex: like meta_eval but uses caller-supplied lex/parse functions.
+# This is used by how_meta.how when running under the C interpreter (which
+# lacks the Python-specific _meta_lex/_meta_parse builtins).
+var meta_eval_ex = (ast, lex_fn, parse_fn){
+    var g = make_globals(),
+    # Override _lex/_parse with the real module functions
+    env_set(g, "_lex",   lex_fn),
+    env_set(g, "_parse", parse_fn),
+    env_set(g, "_meta_lex",   lex_fn),
+    env_set(g, "_meta_parse", parse_fn),
     :: eval_node(ast, g)
 }
