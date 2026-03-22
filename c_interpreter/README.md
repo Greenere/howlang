@@ -2,6 +2,9 @@
 
 Single-file C interpreter for Howlang. No dependencies beyond the C standard library.
 
+- howlang.c is written by Claude
+- howlang2.c is written by ChatGPT
+
 ## Build on macOS
 
 ```bash

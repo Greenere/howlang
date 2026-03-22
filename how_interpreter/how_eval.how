@@ -462,7 +462,9 @@ eval_node = (node, env){
             ki2 >= nk: break,
             var mvar_name = mod_keys(ki2),
             var mvar_val  = get_key(mod_map, mvar_name),
-            env_set(env, mvar_name, mvar_val),
+            # Do not overwrite the module object itself when an export has the
+            # same name as the module/alias (e.g. module graph exporting class graph).
+            mvar_name != bind_as: { env_set(env, mvar_name, mvar_val) },
             ki2 = ki2 + 1
         },
         :: ok_sig(mod_map)
@@ -653,8 +655,8 @@ eval_branches = (branches, env){
 # ── Function call ─────────────────────────────────────────────────────────────
 call_fn = (fn, args){
     # Dispatch builtins (e.g. {tag:"builtin", name:"_lex"})
-    type(fn) == "map" and has_key(fn, "tag") and fn("tag") == "builtin": {
-        var bres = call_builtin(fn("name"), args),
+    type(fn) == "map" and has_key(fn, "tag") and get_key(fn, "tag") == "builtin": {
+        var bres = call_builtin(get_key(fn, "name"), args),
         # call_builtin uses :: which creates {sig:"return", val:ok_sig(...)};
         # unwrap the return layer so caller sees the ok_sig directly
         bres("sig") == "return": { :: bres("val") },
@@ -665,14 +667,14 @@ call_fn = (fn, args){
     type(fn) == "function" or type(fn) == "builtin": {
         :: ok_sig(_host_call(fn, args))
     },
-    fn("is_loop"): {
+    get_key(fn, "is_loop"): {
         # Unbounded loop
-        var local = env_new(fn("env")),
+        var local = env_new(get_key(fn, "env")),
         var loop_result = ok_sig(none),
         var loop_done   = false,
         (:)={
             loop_done: break,
-            var r = eval_branches(fn("branches"), local),
+            var r = eval_branches(get_key(fn, "branches"), local),
             r("sig") == "return": { loop_result = ok_sig(r("val")), loop_done = true },
             r("sig") == "break":  { loop_result = ok_sig(none),     loop_done = true },
             r("sig") == "ok":     none   # keep looping
@@ -680,12 +682,12 @@ call_fn = (fn, args){
         :: loop_result
     },
     # Normal function
-    var local = env_new(fn("env")),
+    var local = env_new(get_key(fn, "env")),
     var pi = 0,
-    (0:len(fn("params"))) = pi{
-        env_set(local, fn("params")(pi), args(pi))
+    (0:len(get_key(fn, "params"))) = pi{
+        env_set(local, get_key(fn, "params")(pi), args(pi))
     },
-    var r = eval_branches(fn("branches"), local),
+    var r = eval_branches(get_key(fn, "branches"), local),
     r("sig") == "return" :: ok_sig(r("val")),
     :: ok_sig(none)
 }
@@ -693,9 +695,9 @@ call_fn = (fn, args){
 # ── Public entry point ────────────────────────────────────────────────────────
 # ── Class instantiation ────────────────────────────────────────────────────────
 var instantiate_class = (cls, args, outer_env){
-    var params   = cls("params"),
-    var branches = cls("branches"),
-    var cls_env  = cls("env"),
+    var params   = get_key(cls, "params"),
+    var branches = get_key(cls, "branches"),
+    var cls_env  = get_key(cls, "env"),
 
     var init_env = env_new(cls_env),
     var pi = 0,
@@ -746,10 +748,10 @@ var instantiate_class = (cls, args, outer_env){
     (0:len(fk)) = ki{
         var k = fk(ki),
         var v = get_key(fields, k),
-        type(v) == "map" and has_key(v, "tag") and v("tag") == "closure": {
-            set_key(fields, k, {"tag": "closure", "params": v("params"),
-                                 "branches": v("branches"), "env": inst_env,
-                                 "is_loop": v("is_loop")})
+        type(v) == "map" and has_key(v, "tag") and get_key(v, "tag") == "closure": {
+            set_key(fields, k, {"tag": "closure", "params": get_key(v, "params"),
+                                 "branches": get_key(v, "branches"), "env": inst_env,
+                                 "is_loop": get_key(v, "is_loop")})
         }
     },
 
