@@ -54,7 +54,13 @@ var meta_run_file = (path){
 var meta_repl = (){
     print("Howlang meta-interpreter  |  quit() or Ctrl-D to exit"),
 
-    var env   = meta_make_globals(),
+    # Build env with real lex/parse injected so `how` imports work inside the REPL
+    var env = meta_make_globals(),
+    set_key(env("vars"), "_lex",         how_lexer.tokenise),
+    set_key(env("vars"), "_parse",       how_parser.parse),
+    set_key(env("vars"), "_meta_lex",    how_lexer.tokenise),
+    set_key(env("vars"), "_meta_parse",  how_parser.parse),
+
     var buf   = "",
     var going = true,
 
@@ -90,7 +96,19 @@ var meta_repl = (){
                 var tokens = how_lexer.tokenise(src),
                 var ast    = how_parser.parse(tokens),
                 var r      = how_eval.eval_node(ast, env),
-                r("sig") == "ok" and r("val") != none: print(str(r("val")))
+                r("sig") == "ok" and r("val") != none: {
+                    var v = r("val"),
+                    # Don't try to print raw closure maps (infinite env chain)
+                    type(v) == "map" and has_key(v, "tag") and
+                    (v("tag") == "closure" or v("tag") == "class"): {
+                        print("<function>")
+                    },
+                    type(v) == "map" and (not has_key(v, "tag") or
+                    (v("tag") != "closure" and v("tag") != "class")): {
+                        print(v)
+                    },
+                    type(v) != "map": { print(v) }
+                }
             }
         }
     }

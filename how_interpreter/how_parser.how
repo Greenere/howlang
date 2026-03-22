@@ -700,17 +700,66 @@ p_block = (st){
 }
 
 # ── Statement ─────────────────────────────────────────────────────────────────
+
+# Read a module path token sequence: ident, ident/ident/..., /abs/path, or "string"
+# Returns {path, st} where path is the joined string
+var p_read_path = (st){
+    # Quoted string
+    st_cur(st)("t") == "STRING": {
+        :: {"path": st_cur(st)("v"), "st": st_adv(st)}
+    },
+    # Absolute path starting with /
+    st_cur(st)("t") == "SLASH": {
+        var path = "/",
+        var s = st_adv(st),  # consume /
+        (:)={
+            s("pos") >= len(s("tokens")): break,
+            st_cur(s)("t") != "IDENT": break,
+            path = path + st_cur(s)("v"),
+            s = st_adv(s),
+            st_cur(s)("t") != "SLASH": break,
+            path = path + "/",
+            s = st_adv(s)  # consume /
+        },
+        :: {"path": path, "st": s}
+    },
+    # Bare ident, optionally ident/ident/...
+    st_cur(st)("t") == "IDENT": {
+        var path = st_cur(st)("v"),
+        var s = st_adv(st),
+        (:)={
+            st_cur(s)("t") != "SLASH": break,
+            var snext = st_adv(s),
+            st_cur(snext)("t") != "IDENT": break,
+            path = path + "/" + st_cur(snext)("v"),
+            s = st_adv(snext)
+        },
+        :: {"path": path, "st": s}
+    },
+    :: {"path": "", "st": st}
+}
+
 var p_stmt = (st){
     st_cur(st)("t") == "HOW": {
         var st2 = st_adv(st),
-        # Support: how ident  OR  how "path/to/module"
-        var mod_path = st_cur(st2)("v"),
-        :: {"node": nd("how_stmt", {"name": mod_path}), "st": st_adv(st2)}
+        # how <path> [as <alias>] — path can be bare, slash-separated, or quoted
+        var pr = p_read_path(st2),
+        var mod_path = pr("path"),
+        var st3 = pr("st"),
+        # optional: as <alias>
+        var alias = none,
+        st_cur(st3)("t") == "AS": {
+            var st4 = st_adv(st3),  # consume "as"
+            alias = st_cur(st4)("v"),
+            st3 = st_adv(st4)       # consume alias ident
+        },
+        :: {"node": nd("how_stmt", {"name": mod_path, "alias": alias}), "st": st3}
     },
     st_cur(st)("t") == "WHERE": {
         var st2 = st_adv(st),
-        var dir_path = st_cur(st2)("v"),
-        :: {"node": nd("where_stmt", {"path": dir_path}), "st": st_adv(st2)}
+        # where <path> — no quotes required
+        var pr = p_read_path(st2),
+        :: {"node": nd("where_stmt", {"path": pr("path")}), "st": pr("st")}
     },
     st_cur(st)("t") == "VAR": {
         var st2  = st_adv(st),

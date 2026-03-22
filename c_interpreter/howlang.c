@@ -102,7 +102,7 @@ static char *buf_done(Buf *b) {
 
 typedef enum {
     TT_EOF, TT_NUMBER, TT_STRING, TT_BOOL, TT_NONE, TT_IDENT,
-    TT_VAR, TT_BREAK, TT_HOW, TT_WHERE,
+    TT_VAR, TT_BREAK, TT_HOW, TT_WHERE, TT_AS,
     TT_LPAREN, TT_RPAREN, TT_LBRACE, TT_RBRACE, TT_LBRACKET, TT_RBRACKET,
     TT_COMMA, TT_DOT, TT_COLON, TT_DCOLON,
     TT_PLUS, TT_MINUS, TT_STAR, TT_SLASH, TT_PERCENT,
@@ -213,6 +213,7 @@ static TokenList *lex(const char *src) {
             else if (!strcmp(tmp,"break")) { t.type = TT_BREAK; }
             else if (!strcmp(tmp,"how"))   { t.type = TT_HOW; }
             else if (!strcmp(tmp,"where")) { t.type = TT_WHERE; }
+            else if (!strcmp(tmp,"as"))    { t.type = TT_AS; }
             else { t.type = TT_IDENT; t.sval = xstrdup(tmp); }
             tl_push(tl, t); continue;
         }
@@ -331,6 +332,11 @@ struct Node {
             char *attr;
         } dot;
 
+        struct { /* N_IMPORT */
+            char *path;   /* module path, e.g. "lru_cache" or "samples/graph" */
+            char *alias;  /* optional alias, NULL if none */
+        } import_node;
+
         struct { /* N_CALL */
             Node    *callee;
             NodeList args;
@@ -427,6 +433,37 @@ static Node *parse_stmt(Parser *p);
 static Node *parse_branch(Parser *p);
 static void  parse_func_body(Parser *p, NodeList *out);
 
+
+/* Parse a module path: bare ident, ident/ident/..., /abs/path, or "quoted/path" */
+static char *parse_module_path(Parser *p) {
+    char buf[4096]; buf[0] = 0;
+    if (p_check(p, TT_STRING)) {
+        /* "quoted/path" */
+        strncpy(buf, p_adv(p)->sval, sizeof(buf)-1);
+    } else if (p_check(p, TT_SLASH)) {
+        /* /absolute/path — starts with slash */
+        strncat(buf, "/", sizeof(buf)-1);
+        p_adv(p);  /* consume leading / */
+        while (p_check(p, TT_IDENT)) {
+            strncat(buf, p_adv(p)->sval, sizeof(buf)-strlen(buf)-1);
+            if (!p_check(p, TT_SLASH)) break;
+            p_adv(p);
+            strncat(buf, "/", sizeof(buf)-strlen(buf)-1);
+        }
+    } else {
+        /* bare ident, optionally followed by /ident/... */
+        char *seg = p_expect(p, TT_IDENT, "expected module name")->sval;
+        strncpy(buf, seg, sizeof(buf)-1);
+        while (p_check(p, TT_SLASH)) {
+            p_adv(p);
+            if (!p_check(p, TT_IDENT)) break;
+            strncat(buf, "/",  sizeof(buf)-strlen(buf)-1);
+            strncat(buf, p_adv(p)->sval, sizeof(buf)-strlen(buf)-1);
+        }
+    }
+    return xstrdup(buf);
+}
+
 static Node *parse_prog(Parser *p) {
     Node *n = make_node(N_PROG, 1);
     while (!p_check(p, TT_EOF)) {
@@ -449,30 +486,25 @@ static Node *parse_stmt(Parser *p) {
         n->vardecl.value = val;
         return n;
     }
-    /* how import */
+    /* how <path> [as <alias>] */
     if (p_check(p, TT_HOW)) {
         p_adv(p);
-        /* Accept: how ident  or  how "path/to/mod"  or  how ident/ident (slash-separated) */
-        char mod_path[4096] = {0};
-        if (p_check(p, TT_STRING)) {
-            /* how "some/path/module" */
-            strncpy(mod_path, p_adv(p)->sval, sizeof(mod_path)-1);
-        } else {
-            /* how ident  (possibly followed by /ident/ident...) */
-            char *first = p_expect(p,TT_IDENT,"expected module name after how")->sval;
-            strncpy(mod_path, first, sizeof(mod_path)-1);
+        char *mod_path = parse_module_path(p);
+        char *alias = NULL;
+        if (p_check(p, TT_AS)) {
+            p_adv(p);
+            alias = xstrdup(p_expect(p, TT_IDENT, "expected name after 'as'")->sval);
         }
         Node *n = make_node(N_IMPORT, line);
-        n->sval = xstrdup(mod_path);
+        n->import_node.path  = mod_path;
+        n->import_node.alias = alias;
         return n;
     }
+    /* where <path> */
     if (p_check(p, TT_WHERE)) {
         p_adv(p);
         Node *n = make_node(N_WHERE, line);
-        if (p_check(p, TT_STRING))
-            n->sval = xstrdup(p_adv(p)->sval);
-        else
-            n->sval = xstrdup(p_expect(p,TT_IDENT,"expected path after where")->sval);
+        n->sval = parse_module_path(p);
         return n;
     }
     /* everything else — delegate to branch parser */
@@ -496,27 +528,24 @@ static Node *parse_branch(Parser *p) {
         return n;
     }
 
-    /* how import inside function body */
+    /* how <path> [as <alias>] inside function body */
     if (p_check(p, TT_HOW)) {
         p_adv(p);
-        char mod_path[4096] = {0};
-        if (p_check(p, TT_STRING))
-            strncpy(mod_path, p_adv(p)->sval, sizeof(mod_path)-1);
-        else {
-            char *first = p_expect(p,TT_IDENT,"expected module name after how")->sval;
-            strncpy(mod_path, first, sizeof(mod_path)-1);
+        char *mod_path = parse_module_path(p);
+        char *alias = NULL;
+        if (p_check(p, TT_AS)) {
+            p_adv(p);
+            alias = xstrdup(p_expect(p, TT_IDENT, "expected name after 'as'")->sval);
         }
         Node *n = make_node(N_IMPORT, line);
-        n->sval = xstrdup(mod_path);
+        n->import_node.path  = mod_path;
+        n->import_node.alias = alias;
         return n;
     }
     if (p_check(p, TT_WHERE)) {
         p_adv(p);
         Node *n = make_node(N_WHERE, line);
-        if (p_check(p, TT_STRING))
-            n->sval = xstrdup(p_adv(p)->sval);
-        else
-            n->sval = xstrdup(p_expect(p,TT_IDENT,"expected path after where")->sval);
+        n->sval = parse_module_path(p);
         return n;
     }
 
@@ -1620,6 +1649,7 @@ static int how_eq(Value *a, Value *b) {
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 /* Import search paths */
+static int    g_num_builtins = 0;  /* set after setup_globals(); only real builtins */
 static char **import_dirs;
 static int    import_dirs_len;
 static int    import_dirs_cap;
@@ -1667,7 +1697,7 @@ static void run_loop(HowFunc *fn, Signal *sig);
 static Value *run_for_loop(Node *node, Env *env, Signal *sig);
 static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig);
 static void exec_stmt(Node *node, Env *env, Signal *sig);
-static void exec_import(const char *modname, Env *env);
+static void exec_import(const char *modname, const char *alias, Env *env);
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Builtins                                                                    */
@@ -2441,7 +2471,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         return val_none();
 
     case N_IMPORT:
-        exec_import(node->sval, env);
+        exec_import(node->import_node.path, node->import_node.alias, env);
         return val_none();
     case N_WHERE:
         add_import_dir(node->sval);
@@ -2531,7 +2561,7 @@ static void exec_stmt(Node *node, Env *env, Signal *sig) {
         return;
     }
     case N_IMPORT:
-        exec_import(node->sval, env);
+        exec_import(node->import_node.path, node->import_node.alias, env);
         return;
     case N_WHERE:
         /* where "dir" — add directory to module search path */
@@ -2826,7 +2856,7 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
 /* exec_body forward decl — already defined above but referenced here */
 
 /* Module import */
-static void exec_import(const char *modname, Env *env) {
+static void exec_import(const char *modname, const char *alias, Env *env) {
     /* modname may be "path/to/module" (string-path form) or bare "module" */
     char bind_name[256];  /* name to bind in env = last path component */
     strncpy(bind_name, modname, sizeof(bind_name)-1);
@@ -2855,7 +2885,7 @@ static void exec_import(const char *modname, Env *env) {
             add_import_dir(dir);
         }
         /* Now import just the module name */
-        exec_import(bind_name, env);
+        exec_import(bind_name, alias, env);
         return;
     } else {
         strncpy(bind_name, modname, sizeof(bind_name)-1);
@@ -2870,14 +2900,13 @@ static void exec_import(const char *modname, Env *env) {
     free(path);
 
     /* push module directory to import path */
-    char dir[4096]; strncpy(dir, path, sizeof(dir)-1);
-    /* path is already freed — use modname based lookup */
-    /* find module dir */
-    path = find_how_file(modname);
-    strncpy(dir, path, sizeof(dir)-4);
-    free(path);
-    char *dslash = strrchr(dir,'/');
-    if (dslash) { dslash[1]=0; add_import_dir(dir); }
+    {
+        char *path2 = find_how_file(modname);
+        char dir[4096]; strncpy(dir, path2, sizeof(dir)-4);
+        free(path2);
+        char *dslash = strrchr(dir,'/');
+        if (dslash) { dslash[1]=0; add_import_dir(dir); }
+    }
 
     TokenList *tl = lex(src); free(src);
     Parser p = {tl, 0};
@@ -2901,9 +2930,9 @@ static void exec_import(const char *modname, Env *env) {
     /* expose non-builtin vars in a clean env */
     Env *pub_env = env_new(NULL);
     for (int i=0;i<mod_env->len;i++) {
-        /* skip builtins */
+        /* skip true builtins (not user-imported vars that ended up in g_globals) */
         int is_builtin = 0;
-        for (int j=0;j<g_globals->len;j++) {
+        for (int j=0;j<g_num_builtins;j++) {
             if (!strcmp(g_globals->entries[j].key, mod_env->entries[i].key)) {
                 is_builtin=1; break;
             }
@@ -2919,11 +2948,12 @@ static void exec_import(const char *modname, Env *env) {
     for (int i=0;i<pub_env->len;i++) {
         env_set(env, pub_env->entries[i].key, pub_env->entries[i].val);
     }
-    /* Bind the module under its name LAST — this always wins so that
-     * dot-access (module.var) always works. e.g.:
-     *   how lru_cache  →  lru_cache = module, lru_cache.lru_cache = class
-     *   how graph      →  graph = module, graph.graph = class           */
-    env_set(env, bind_name, modval);
+    /* Bind the module under alias (if given) or bind_name.
+     * Module binding wins last so dot-access always works:
+     *   how lru_cache           → lru_cache = module
+     *   how lru_cache as cache  → cache = module, cache.lru_cache = class */
+    const char *final_name = (alias && alias[0]) ? alias : bind_name;
+    env_set(env, final_name, modval);
     val_decref(modval);
     env_decref(mod_env);
 }
@@ -3292,6 +3322,7 @@ int main(int argc, char **argv) {
     /* Setup globals */
     g_globals = env_new(NULL);
     setup_globals(g_globals);
+    g_num_builtins = g_globals->len;  /* snapshot: only real builtins */
 
     /* Build args list: argv[1:] */
     HowList *args_list = list_new();

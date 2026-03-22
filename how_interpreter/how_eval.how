@@ -411,17 +411,9 @@ eval_node = (node, env){
 
     tag == "how_stmt": {
         var mod_name_raw = node("name"),
-        # If mod_name_raw contains "/" it is a path import like "samples/lru_cache".
-        # Split on last "/" to get the directory prefix and the bare module name.
-        # We implement the split using _host_call on the builtin dirof helper isn't ideal,
-        # so we use a simple Howlang string scan instead.
+        var alias = node("alias"),   # may be none
+        # Split path: "samples/lru_cache" → add "samples" to search, bind as "lru_cache"
         var mod_name = mod_name_raw,
-        # Handle path import: "samples/lru_cache" → add "samples" to search, bind as "lru_cache"
-        # Use _resolve_path_import(full_path) -> {dir, name} if path contains /
-        # We detect a path by trying to resolve the full string as-is first.
-        # If mod_name_raw starts with . or / or contains /, it is a path.
-        # We use _add_search_dir + _basename builtins to split it.
-        # If _basename is available, use it; otherwise fall back to full name.
         type(_basename) == "builtin": {
             var dir_part = _dirname(mod_name_raw),
             var base = _basename(mod_name_raw),
@@ -460,7 +452,10 @@ eval_node = (node, env){
             set_key(mod_map, mod_keys(ki), get_key(mod_env("vars"), mod_keys(ki))),
             ki = ki + 1
         },
-        env_set(env, mod_name, mod_map),
+        # Use alias if provided, otherwise use mod_name
+        var bind_as = mod_name,
+        alias != none: { bind_as = alias },
+        env_set(env, bind_as, mod_map),
         # Also bind each module var directly into the calling env
         var ki2 = 0,
         (:)={

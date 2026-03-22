@@ -62,6 +62,7 @@ var keyword_type = (w){
     w == "break" :: "BREAK",
     w == "how"   :: "HOW",
     w == "where" :: "WHERE",
+    w == "as"    :: "AS",
     :: "IDENT"
 }
 
