@@ -53,6 +53,7 @@ var meta_run_file = (path){
 
 var meta_repl = (){
     print("Howlang meta-interpreter  |  quit() or Ctrl-D to exit"),
+    print("Note: {} is an empty map; use list() for an empty list."),
 
     # Build env with real lex/parse injected so `how` imports work inside the REPL
     var env = meta_make_globals(),

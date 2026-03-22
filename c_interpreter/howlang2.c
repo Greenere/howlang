@@ -1619,6 +1619,32 @@ static char *val_repr(Value *v) {
 /*  Truthiness and equality                                                     */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
+static const char *value_type_name(Value *v) {
+    if (!v) return "none";
+    switch (v->type) {
+        case VT_NONE: return "none";
+        case VT_BOOL: return "bool";
+        case VT_NUM: return "number";
+        case VT_STR: return "string";
+        case VT_LIST: return "list";
+        case VT_MAP: return "map";
+        case VT_FUNC: return "function";
+        case VT_BUILTIN: return "builtin";
+        case VT_INSTANCE: return "instance";
+        case VT_CLASS: return "class";
+        case VT_MODULE: return "module";
+        default: return "value";
+    }
+}
+
+static void die_bad_plus(const char *op, Value *a, Value *b, int line) {
+    if (a && b && a->type==VT_MAP && b->type==VT_MAP) {
+        die("'%s' is not defined for maps (line %d); note: {} is an empty map, not an empty list. Use list() for an empty list.", op, line);
+    }
+    die("'%s' is not defined for %s and %s (line %d); '+' supports numbers, strings, or list+list.",
+        op, value_type_name(a), value_type_name(b), line);
+}
+
 static int how_truthy(Value *v) {
     if (!v || v->type==VT_NONE) return 0;
     if (v->type==VT_BOOL) return v->bval;
@@ -2155,7 +2181,7 @@ static Value *apply_augop(Value *old, Value *val, const char *op, int line) {
             for (int i=0;i<val->list->len;i++) list_push(nl,val->list->items[i]);
             Value *r = val_list(nl); list_decref(nl); return r;
         }
-        if (old->type!=VT_NUM||val->type!=VT_NUM) die("+= requires numbers or strings (line %d)",line);
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die_bad_plus("+=", old, val, line);
         return val_num(old->nval + val->nval);
     }
     if (!strcmp(op,"-=")) {
@@ -2225,7 +2251,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 Buf buf={0}; buf_append(&buf,a); buf_append(&buf,b);
                 free(a); free(b); res=val_str_own(buf_done(&buf));
             } else {
-                if(l->type!=VT_NUM||r->type!=VT_NUM) die("'+' requires numbers (line %d)",node->line);
+                if(l->type!=VT_NUM||r->type!=VT_NUM) die_bad_plus("+", l, r, node->line);
                 res=val_num(l->nval+r->nval);
             }
         } else if (!strcmp(op,"-")) {
@@ -3302,50 +3328,108 @@ static int repl_should_autoprint(const char *src) {
     return 1;
 }
 
+static int repl_bracket_delta(const char *s) {
+    int delta = 0;
+    char quote = 0;
+    int escaped = 0;
+    while (*s) {
+        char c = *s++;
+        if (quote) {
+            if (escaped) {
+                escaped = 0;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = 1;
+                continue;
+            }
+            if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '#') break;
+        if (c == 39 || c == '"') {
+            quote = c;
+            continue;
+        }
+        if (c == '(' || c == '{' || c == '[') delta++;
+        else if (c == ')' || c == '}' || c == ']') delta--;
+    }
+    return delta;
+}
+
 static void repl(Env *env) {
     printf("Howlang  |  Ctrl-D or quit() to exit\n");
     char buf[REPL_LINE_MAX];
+    char srcbuf[REPL_LINE_MAX * 16];
 
     while (1) {
-        int r = repl_readline(">> ", buf, sizeof(buf));
-        if (r < 0) { printf("\n"); break; }
+        srcbuf[0] = 0;
+        int depth = 0;
+        int first_line = 1;
+        int aborted = 0;
 
-        /* Trim */
-        char *line = buf;
-        while (*line == ' ' || *line == '\t') line++;
-        int len = strlen(line);
-        while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t')) line[--len] = 0;
-        if (!len) continue;
+        while (1) {
+            int r = repl_readline(first_line ? ">> " : ".. ", buf, sizeof(buf));
+            if (r < 0) {
+                if (first_line) { printf("\n"); return; }
+                fprintf(stderr, "\033[31m[Error] incomplete input; expected closing bracket(s)\033[0m\n");
+                printf("\n");
+                return;
+            }
 
-        if (!strcmp(line, "quit()") || !strcmp(line, "exit")) break;
+            char *line = buf;
+            while (*line == ' ' || *line == '\t') line++;
+            int len = strlen(line);
+            while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t')) line[--len] = 0;
 
-        repl_hist_push(line);
+            if (first_line && !len) continue;
+            if (first_line && (!strcmp(line, "quit()") || !strcmp(line, "exit"))) return;
 
-        /* If it looks like a bare expression, auto-print the result */
-        char runbuf[REPL_LINE_MAX + 64];
-        int autoprint = repl_should_autoprint(line);
+            if (strlen(srcbuf) + strlen(line) + 2 >= sizeof(srcbuf)) {
+                fprintf(stderr, "\033[31m[Error] REPL input too long\033[0m\n");
+                aborted = 1;
+                break;
+            }
+
+            strcat(srcbuf, line);
+            strcat(srcbuf, "\n");
+            repl_hist_push(line);
+            depth += repl_bracket_delta(line);
+            if (depth < 0) depth = 0;
+
+            first_line = 0;
+            if (depth == 0) break;
+        }
+
+        if (aborted || !srcbuf[0]) continue;
+
+        char *trimmed = srcbuf;
+        while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\n') trimmed++;
+        if (!*trimmed) continue;
+
+        char runbuf[sizeof(srcbuf) + 64];
+        int nl_count = 0;
+        for (char *p = trimmed; *p; p++) if (*p == '\n') nl_count++;
+        int autoprint = (nl_count <= 1) ? repl_should_autoprint(trimmed) : 0;
         if (autoprint) {
-            /* Wrap: evaluate expr, print if not none */
             snprintf(runbuf, sizeof(runbuf),
                 "var _ = ((%s))\n"
                 "_ != none: print(_)\n",
-                line);
+                trimmed);
         } else {
-            strncpy(runbuf, line, sizeof(runbuf)-1);
+            strncpy(runbuf, trimmed, sizeof(runbuf)-1);
+            runbuf[sizeof(runbuf)-1] = 0;
         }
 
-        /* Run with graceful error recovery */
         g_repl_active = 1;
         if (setjmp(g_repl_jmp) == 0) {
             run_source(runbuf, env);
         } else {
-            /* Error was caught — print it nicely and continue */
             fprintf(stderr, "\033[31m[Error] %s\033[0m\n", g_repl_errmsg);
         }
         g_repl_active = 0;
     }
 }
-
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  main                                                                        */
