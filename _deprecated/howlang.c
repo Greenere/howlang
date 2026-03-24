@@ -19,7 +19,6 @@
 #include <assert.h>
 #include <unistd.h>
 #include <setjmp.h>
-#define UNUSED(x) (void)(x)
 
 /* REPL error recovery: when in REPL mode, errors jump back instead of exit() */
 static jmp_buf  g_repl_jmp;
@@ -55,10 +54,8 @@ static void die(const char *fmt, ...) {
 }
 
 static char *xstrdup(const char *s) {
-    size_t len = strlen(s) + 1;
-    char *p = malloc(len);
+    char *p = strdup(s);
     if (!p) die("out of memory");
-    memcpy(p, s, len);
     return p;
 }
 
@@ -234,22 +231,10 @@ static TokenList *lex(const char *src) {
         case '-': TWO('-','=',TT_MINUSEQ); t.type=TT_MINUS; break;
         case '*': TWO('*','=',TT_STAREQ);  t.type=TT_STAR;  break;
         case '/': TWO('/','=',TT_SLASHEQ); t.type=TT_SLASH; break;
-        case '&':
-            if (pos < n && src[pos] == '&') {
-                pos++;
-                t.type = TT_AND;
-            } else {
-                die("unexpected '&' at line %d", line);
-            }
-            break;
-        case '|':
-            if (pos < n && src[pos] == '|') {
-                pos++;
-                t.type = TT_OR;
-            } else {
-                die("unexpected '|' at line %d", line);
-            }
-            break;
+        case '&': if (pos<n&&src[pos]=='&'){pos++;t.type=TT_AND;}
+                  else die("unexpected '&' at line %d",line); break;
+        case '|': if (pos<n&&src[pos]=='|'){pos++;t.type=TT_OR;}
+                  else die("unexpected '|' at line %d",line); break;
         case '%': t.type=TT_PERCENT;  break;
         case '(': t.type=TT_LPAREN;   break;
         case ')': t.type=TT_RPAREN;   break;
@@ -1014,7 +999,7 @@ static Node *parse_atom(Parser *p) {
             } else {
                 /* No immediate colon after first token → scan for colons at depth 0 */
                 int scan = p->pos; int depth=0;
-                int found_colon=0, found_dcolon=0;
+                int found_colon=0, found_dcolon=0, found_comma=0;
                 while (scan < p->tl->len) {
                     TT st = p->tl->toks[scan].type;
                     if(st==TT_LBRACE||st==TT_LPAREN||st==TT_LBRACKET){depth++;scan++;continue;}
@@ -1022,16 +1007,12 @@ static Node *parse_atom(Parser *p) {
                     if(st==TT_EOF||(st==TT_RBRACE&&depth==0)) break;
                     if(depth==0&&st==TT_DCOLON){found_dcolon=1;break;}
                     if(depth==0&&st==TT_COLON){found_colon=1;break;}
-                    if(depth==0&&st==TT_COMMA) break;
+                    if(depth==0&&st==TT_COMMA){found_comma=1;break;}
                     scan++;
                 }
-                if(found_dcolon) {
-                    /* branch function */
-                } else if(found_colon) {
-                    /* A top-level ':' without an immediate key:value pattern is more likely a branch function. */
-                } else {
-                    lookslike_list=1;
-                }
+                if(found_dcolon) lookslike_func=1;
+                else if(found_colon) lookslike_func=1; /* complex cond: body */
+                else lookslike_list=1;
             }
         }
         if (lookslike_list) {
@@ -1074,6 +1055,7 @@ static Node *parse_atom(Parser *p) {
     /* ( ... ) — function, loop, for-range, or grouped expr */
     if (t == TT_LPAREN) {
         p_adv(p); /* ( */
+        int line2 = p_peek(p,0)->line;
 
         /* (:) — unbounded loop: (:){ body } or (:)={ body } (auto-call) */
         if (p_check(p,TT_COLON) && p_peek(p,1)->type == TT_RPAREN) {
@@ -1096,6 +1078,7 @@ static Node *parse_atom(Parser *p) {
         /* lookahead for for-range: scan for : at depth 0, then ), =, IDENT, { */
         /* We scan without consuming */
         {
+            int saved = p->pos;
             int depth = 0;
             int found_colon=0, found_rparen=0, found_eq=0, found_ident=0, is_forrange=0;
             int scan = p->pos;
@@ -1144,11 +1127,14 @@ static Node *parse_atom(Parser *p) {
         /* () or (ident,...) { } — function with zero or more params */
         /* Check if it looks like a param list */
         {
+            int saved = p->pos;
+            int is_func = 0;
             StrList params; memset(&params,0,sizeof(params));
             /* () { */
             if (p_check(p,TT_RPAREN)) {
                 p_adv(p);
                 if (p_check(p,TT_LBRACE)) {
+                    is_func = 1;
                     Node *n = make_node(N_FUNC,line);
                     n->func.params = params;
                     parse_func_body(p,&n->func.branches);
@@ -1162,6 +1148,7 @@ static Node *parse_atom(Parser *p) {
             if (p_check(p,TT_IDENT)) {
                 int scan = p->pos;
                 StrList pl; memset(&pl,0,sizeof(pl));
+                int ok = 1;
                 while (scan < p->tl->len && p->tl->toks[scan].type==TT_IDENT) {
                     sl_push(&pl, xstrdup(p->tl->toks[scan++].sval));
                     if (scan < p->tl->len && p->tl->toks[scan].type==TT_COMMA) scan++;
@@ -1342,6 +1329,7 @@ static void env_decref(Env *e);
 
 static void func_decref(HowFunc *f) {
     if (!f || --f->refcount > 0) return;
+    return;  /* SAFETY: never free HowFunc to prevent UAF */
     for (int i=0;i<f->params.len;i++) free(f->params.s[i]);
     free(f->params.s);
     /* branches are AST nodes — not freed here (AST lifetime = program lifetime) */
@@ -1422,6 +1410,7 @@ static Env *inst_env_new(HowInstance *inst, Env *parent) {
 
 static void env_decref(Env *e) {
     if (!e || --e->refcount > 0) return;
+    return;  /* SAFETY: never free envs to prevent UAF */
     for (int i=0;i<e->len;i++) {
         free(e->entries[i].key);
         val_decref(e->entries[i].val);
@@ -1689,10 +1678,9 @@ static char *find_how_file(const char *name) {
 
 /* Control flow signals via longjmp */
 #include <setjmp.h>
-#define UNUSED(x) (void)(x)
 
 typedef struct SignalReturn { Value *val; } SignalReturn;
-typedef struct SignalBreak  { int dummy; } SignalBreak;
+typedef struct SignalBreak  {}              SignalBreak;
 
 /* We use a linked list of "signal frames" instead of exceptions */
 typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK } SigType;
@@ -2394,9 +2382,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             res=val_list(nl); list_decref(nl);
         } else if (col->type==VT_STR) {
             int slen=strlen(col->sval);
-            if (start < 0) start = 0;
-            if (stop > slen) stop = slen;
-            if (stop < start) stop = start;
+            if(start<0) start=0; if(stop>slen) stop=slen; if(stop<start) stop=start;
             char *s=xmalloc(stop-start+1);
             memcpy(s,col->sval+start,stop-start); s[stop-start]=0;
             res=val_str_own(s);

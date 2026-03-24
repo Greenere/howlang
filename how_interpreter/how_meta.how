@@ -1,122 +1,74 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# how_meta.how  —  Howlang meta-interpreter  (Howlang running inside Howlang)
-#
-# Designed to be interpretable both by the host interpreter AND by itself.
-#
-# Usage (host):
-#   python howlang.py how_meta.how              # meta REPL
-#   python howlang.py how_meta.how script.how   # run script through meta-interp
-#
-# Usage (meta — two levels deep):
-#   python howlang.py how_meta.how how_meta.how              # meta-meta REPL
-#   python howlang.py how_meta.how how_meta.how script.how   # three levels
-# ─────────────────────────────────────────────────────────────────────────────
+# how_meta.how — Howlang meta-interpreter
 
 how how_lexer
 how how_parser
 how how_eval
 
-# ── Override _lex/_parse with meta versions for self-hosting ─────────────────
-# When the meta-interpreter itself runs a `how` statement, it should use
-# how_lexer.tokenise and how_parser.parse (not the host versions).
-# We create a patched make_globals that injects meta-aware _lex/_parse.
-
-# make_globals already uses _meta_lex/_meta_parse — no override needed
 var meta_make_globals = how_eval.make_globals
-
-# ── Core: run a source string, returning a signal {sig, val} ─────────────────
 
 var meta_run = (source){
     var tokens = how_lexer.tokenise(source),
-    var ast    = how_parser.parse(tokens),
-    # Always use meta_eval_ex so the real lex/parse are injected into the meta-env.
-    # This works for both Python and C interpreters.
+    var ast = how_parser.parse(tokens),
     :: how_eval.meta_eval_ex(ast, how_lexer.tokenise, how_parser.parse)
 }
 
-# Run source inside an existing environment (for REPL persistent state)
 var meta_run_in = (source, env){
     var tokens = how_lexer.tokenise(source),
-    var ast    = how_parser.parse(tokens),
+    var ast = how_parser.parse(tokens),
     :: how_eval.eval_node(ast, env)
 }
 
-# Run a .how file — push its directory onto _import_dirs so `how` statements
-# inside the script can find sibling modules in the same directory
 var meta_run_file = (path){
-    # Add the script's directory to module search path, then run
     _push_import_dir(path),
     :: meta_run(read(path))
 }
 
-# ── REPL ──────────────────────────────────────────────────────────────────────
+var meta_run_file_with_argv = (path, argv){
+    _push_import_dir(path),
+    var tokens = how_lexer.tokenise(read(path)),
+    var ast = how_parser.parse(tokens),
+    var g = meta_make_globals(),
+    set_key(g("vars"), "_lex", how_lexer.tokenise),
+    set_key(g("vars"), "_parse", how_parser.parse),
+    set_key(g("vars"), "_meta_lex", how_lexer.tokenise),
+    set_key(g("vars"), "_meta_parse", how_parser.parse),
+    set_key(g("vars"), "__argv", argv),
+    set_key(g("vars"), "__is_import", false),
+    set_key(g("vars"), "__file", path),
+    :: how_eval.eval_node(ast, g)
+}
 
 var meta_repl = (){
     print("Howlang meta-interpreter  |  quit() or Ctrl-D to exit"),
-    print("Tip: use ↑/↓ for history, and type help() for quick tips."),
-
-    # Build env with real lex/parse injected so `how` imports work inside the REPL
+    print("Tip: use write(path, content) to write a file."),
     var env = meta_make_globals(),
-    set_key(env("vars"), "_lex",         how_lexer.tokenise),
-    set_key(env("vars"), "_parse",       how_parser.parse),
-    set_key(env("vars"), "_meta_lex",    how_lexer.tokenise),
-    set_key(env("vars"), "_meta_parse",  how_parser.parse),
-
-    var buf   = "",
+    set_key(env("vars"), "_lex", how_lexer.tokenise),
+    set_key(env("vars"), "_parse", how_parser.parse),
+    set_key(env("vars"), "_meta_lex", how_lexer.tokenise),
+    set_key(env("vars"), "_meta_parse", how_parser.parse),
+    var buf = "",
     var going = true,
-
-    (:)={
+    (:)= {
         going == false: break,
-
         var prompt = "m>> ",
-        buf != "": prompt = "...",
-
+        buf != "": prompt = "... ",
         var line = ask(prompt),
-
-        # EOF → ask() returns none
-        line == none: {
-            print(""),
-            going = false
-        },
-
-        line != none and (line == "quit()" or line == "exit"): {
-            going = false
-        },
-
-        line != none and (line == "help" or line == "help()" or line == ":help"): {
-            print("Commands: quit(), exit(), help()"),
-            print("Imports:   how path/to/module      (example: how samples/test_all)"),
-            print("History:   use ↑ and ↓ to browse previous input"),
-            print("Blocks:    continue with lines ending in '{' or ','"),
-            print("Note:      {} is an empty map; use list() for an empty list")
-        },
-
-        line != none and line != "quit()" and line != "exit" and
-        line != "help" and line != "help()" and line != ":help": {
-            buf != "": buf = buf + "\n" + line,
+        line == none: { print(""), going = false },
+        line != none and (line == "quit()" or line == "exit"): { going = false },
+        line != none and line != "quit()" and line != "exit": {
+            buf != "": buf = buf + "
+" + line,
             buf == "": buf = line,
-
             var last = "",
             len(buf) > 0: last = buf(len(buf)-1:len(buf)),
-
-            # Keep accumulating if line ends with { or ,
             last != "{" and last != ",": {
                 var src = buf,
                 buf = "",
-                var tokens = how_lexer.tokenise(src),
-                var ast    = how_parser.parse(tokens),
-                var r      = how_eval.eval_node(ast, env),
+                var r = meta_run_in(src, env),
                 r("sig") == "ok" and r("val") != none: {
                     var v = r("val"),
-                    # Don't try to print raw closure maps (infinite env chain)
-                    type(v) == "map" and has_key(v, "tag") and
-                    (v("tag") == "closure" or v("tag") == "class"): {
-                        print("<function>")
-                    },
-                    type(v) == "map" and (not has_key(v, "tag") or
-                    (v("tag") != "closure" and v("tag") != "class")): {
-                        print(v)
-                    },
+                    type(v) == "map" and has_key(v, "tag") and (v("tag") == "closure" or v("tag") == "class"): { print("<function>") },
+                    type(v) == "map" and (has_key(v, "tag") == false or (v("tag") != "closure" and v("tag") != "class")): { print(v) },
                     type(v) != "map": { print(v) }
                 }
             }
@@ -124,30 +76,23 @@ var meta_repl = (){
     }
 }
 
-# ── Entry point ───────────────────────────────────────────────────────────────
-# args() = sys.argv[1:]
-# When run as: python howlang.py how_meta.how [script.how]
-#   argv = ["how_meta.how"]           → no script → start REPL
-#   argv = ["how_meta.how", "x.how"]  → script at argv(1) → run it
-
-(){
-    # argv(0) = interpreter itself
-    # argv(1) = first script; argv(2+) = extra files to concat (lib + test pattern)
-    var argv = args(),
-    var has_script = argv != none and len(argv) >= 2,
-    # Multi-file: concatenate all scripts (e.g. lru_cache.how lru_cache_test.how)
-    has_script and len(argv) >= 3: {
-        var combined = "",
-        var ai = 1,
-        (:)={
-            ai >= len(argv): break,
-            _push_import_dir(argv(ai)),
-            combined = combined + read(argv(ai)) + "
-",
-            ai = ai + 1
-        },
-        :: meta_run(combined)
+var meta_main = (argv){
+    __is_import: { :: none },
+    argv == none or len(argv) <= 1: { :: meta_repl() },
+    len(argv) == 2: { :: meta_run_file_with_argv(argv(1), {argv(1)}) },
+    len(argv) >= 3 and _basename(argv(1)) == "how_meta.how": {
+        :: meta_run_file_with_argv(argv(1), {argv(1), argv(2)})
     },
-    has_script :: meta_run_file(argv(1)),
-    :: meta_repl()
-}()
+    var combined = "",
+    var ai = 1,
+    (:)= {
+        ai >= len(argv): break,
+        _push_import_dir(argv(ai)),
+        combined = combined + read(argv(ai)) + "
+",
+        ai = ai + 1
+    },
+    :: meta_run(combined)
+}
+
+meta_main(__argv)

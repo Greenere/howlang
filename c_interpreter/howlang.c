@@ -19,6 +19,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <setjmp.h>
+#define UNUSED(x) (void)(x)
 
 /* REPL error recovery: when in REPL mode, errors jump back instead of exit() */
 static jmp_buf  g_repl_jmp;
@@ -54,8 +55,10 @@ static void die(const char *fmt, ...) {
 }
 
 static char *xstrdup(const char *s) {
-    char *p = strdup(s);
+    size_t len = strlen(s) + 1;
+    char *p = malloc(len);
     if (!p) die("out of memory");
+    memcpy(p, s, len);
     return p;
 }
 
@@ -231,10 +234,22 @@ static TokenList *lex(const char *src) {
         case '-': TWO('-','=',TT_MINUSEQ); t.type=TT_MINUS; break;
         case '*': TWO('*','=',TT_STAREQ);  t.type=TT_STAR;  break;
         case '/': TWO('/','=',TT_SLASHEQ); t.type=TT_SLASH; break;
-        case '&': if (pos<n&&src[pos]=='&'){pos++;t.type=TT_AND;}
-                  else die("unexpected '&' at line %d",line); break;
-        case '|': if (pos<n&&src[pos]=='|'){pos++;t.type=TT_OR;}
-                  else die("unexpected '|' at line %d",line); break;
+        case '&':
+            if (pos < n && src[pos] == '&') {
+                pos++;
+                t.type = TT_AND;
+            } else {
+                die("unexpected '&' at line %d", line);
+            }
+            break;
+        case '|':
+            if (pos < n && src[pos] == '|') {
+                pos++;
+                t.type = TT_OR;
+            } else {
+                die("unexpected '|' at line %d", line);
+            }
+            break;
         case '%': t.type=TT_PERCENT;  break;
         case '(': t.type=TT_LPAREN;   break;
         case ')': t.type=TT_RPAREN;   break;
@@ -999,7 +1014,7 @@ static Node *parse_atom(Parser *p) {
             } else {
                 /* No immediate colon after first token → scan for colons at depth 0 */
                 int scan = p->pos; int depth=0;
-                int found_colon=0, found_dcolon=0, found_comma=0;
+                int found_colon=0, found_dcolon=0;
                 while (scan < p->tl->len) {
                     TT st = p->tl->toks[scan].type;
                     if(st==TT_LBRACE||st==TT_LPAREN||st==TT_LBRACKET){depth++;scan++;continue;}
@@ -1007,12 +1022,16 @@ static Node *parse_atom(Parser *p) {
                     if(st==TT_EOF||(st==TT_RBRACE&&depth==0)) break;
                     if(depth==0&&st==TT_DCOLON){found_dcolon=1;break;}
                     if(depth==0&&st==TT_COLON){found_colon=1;break;}
-                    if(depth==0&&st==TT_COMMA){found_comma=1;break;}
+                    if(depth==0&&st==TT_COMMA) break;
                     scan++;
                 }
-                if(found_dcolon) lookslike_func=1;
-                else if(found_colon) lookslike_func=1; /* complex cond: body */
-                else lookslike_list=1;
+                if(found_dcolon) {
+                    /* branch function */
+                } else if(found_colon) {
+                    /* A top-level ':' without an immediate key:value pattern is more likely a branch function. */
+                } else {
+                    lookslike_list=1;
+                }
             }
         }
         if (lookslike_list) {
@@ -1055,7 +1074,6 @@ static Node *parse_atom(Parser *p) {
     /* ( ... ) — function, loop, for-range, or grouped expr */
     if (t == TT_LPAREN) {
         p_adv(p); /* ( */
-        int line2 = p_peek(p,0)->line;
 
         /* (:) — unbounded loop: (:){ body } or (:)={ body } (auto-call) */
         if (p_check(p,TT_COLON) && p_peek(p,1)->type == TT_RPAREN) {
@@ -1078,7 +1096,6 @@ static Node *parse_atom(Parser *p) {
         /* lookahead for for-range: scan for : at depth 0, then ), =, IDENT, { */
         /* We scan without consuming */
         {
-            int saved = p->pos;
             int depth = 0;
             int found_colon=0, found_rparen=0, found_eq=0, found_ident=0, is_forrange=0;
             int scan = p->pos;
@@ -1127,14 +1144,11 @@ static Node *parse_atom(Parser *p) {
         /* () or (ident,...) { } — function with zero or more params */
         /* Check if it looks like a param list */
         {
-            int saved = p->pos;
-            int is_func = 0;
             StrList params; memset(&params,0,sizeof(params));
             /* () { */
             if (p_check(p,TT_RPAREN)) {
                 p_adv(p);
                 if (p_check(p,TT_LBRACE)) {
-                    is_func = 1;
                     Node *n = make_node(N_FUNC,line);
                     n->func.params = params;
                     parse_func_body(p,&n->func.branches);
@@ -1148,7 +1162,6 @@ static Node *parse_atom(Parser *p) {
             if (p_check(p,TT_IDENT)) {
                 int scan = p->pos;
                 StrList pl; memset(&pl,0,sizeof(pl));
-                int ok = 1;
                 while (scan < p->tl->len && p->tl->toks[scan].type==TT_IDENT) {
                     sl_push(&pl, xstrdup(p->tl->toks[scan++].sval));
                     if (scan < p->tl->len && p->tl->toks[scan].type==TT_COMMA) scan++;
@@ -1204,6 +1217,8 @@ struct HowMap {
     int     len;
     int     cap;
     int     refcount;
+    int     gc_mark;
+    struct HowMap *gc_next;
 };
 
 struct HowList {
@@ -1211,6 +1226,8 @@ struct HowList {
     int     len;
     int     cap;
     int     refcount;
+    int     gc_mark;
+    struct HowList *gc_next;
 };
 
 struct HowFunc {
@@ -1219,6 +1236,8 @@ struct HowFunc {
     Env     *closure;
     int      is_loop;
     int      refcount;
+    int      gc_mark;
+    struct HowFunc *gc_next;
 };
 
 struct HowClass {
@@ -1226,18 +1245,24 @@ struct HowClass {
     NodeList branches;
     Env     *closure;
     int      refcount;
+    int      gc_mark;
+    struct HowClass *gc_next;
 };
 
 struct HowInstance {
     HowMap  *fields;  /* shared with inst_env */
     Env     *inst_env;
     int      refcount;
+    int      gc_mark;
+    struct HowInstance *gc_next;
 };
 
 struct HowModule {
     char *name;
     Env  *env;
     int   refcount;
+    int   gc_mark;
+    struct HowModule *gc_next;
 };
 
 typedef Value* (*BuiltinFn)(int argc, Value **argv, void *ctx);
@@ -1245,6 +1270,8 @@ typedef Value* (*BuiltinFn)(int argc, Value **argv, void *ctx);
 struct Value {
     VT  type;
     int refcount;
+    int gc_mark;
+    struct Value *gc_next;
     union {
         int       bval;
         double    nval;
@@ -1267,11 +1294,65 @@ static Value *V_NONE_SINGLETON;
 static Value *V_TRUE_SINGLETON;
 static Value *V_FALSE_SINGLETON;
 
+static Value       *g_all_values = NULL;
+static HowMap      *g_all_maps = NULL;
+static HowList     *g_all_lists = NULL;
+static HowFunc     *g_all_funcs = NULL;
+static HowClass    *g_all_classes = NULL;
+static HowInstance *g_all_instances = NULL;
+static HowModule   *g_all_modules = NULL;
+static Env         *g_all_envs = NULL;
+static Env         *g_globals = NULL;
+
+static size_t g_gc_allocations = 0;
+static size_t g_gc_collections = 0;
+static size_t g_gc_last_collect_allocs = 0;
+static int g_gc_in_progress = 0;
+static size_t g_gc_threshold = 256;
+
+typedef struct { Value ***slots; int len; int cap; } GcValueRootStack;
+typedef struct { Env   ***slots; int len; int cap; } GcEnvRootStack;
+static GcValueRootStack g_gc_value_roots = {0};
+static GcEnvRootStack g_gc_env_roots = {0};
+
+static void gc_push_value_root(Value **slot) {
+    if (g_gc_value_roots.len == g_gc_value_roots.cap) {
+        g_gc_value_roots.cap = g_gc_value_roots.cap ? g_gc_value_roots.cap * 2 : 64;
+        g_gc_value_roots.slots = xrealloc(g_gc_value_roots.slots, sizeof(Value**) * g_gc_value_roots.cap);
+    }
+    g_gc_value_roots.slots[g_gc_value_roots.len++] = slot;
+}
+static void gc_pop_value_root(void) {
+    if (g_gc_value_roots.len > 0) g_gc_value_roots.len--;
+}
+static void gc_push_env_root(Env **slot) {
+    if (g_gc_env_roots.len == g_gc_env_roots.cap) {
+        g_gc_env_roots.cap = g_gc_env_roots.cap ? g_gc_env_roots.cap * 2 : 32;
+        g_gc_env_roots.slots = xrealloc(g_gc_env_roots.slots, sizeof(Env**) * g_gc_env_roots.cap);
+    }
+    g_gc_env_roots.slots[g_gc_env_roots.len++] = slot;
+}
+static void gc_pop_env_root(void) {
+    if (g_gc_env_roots.len > 0) g_gc_env_roots.len--;
+}
+
+#define GC_ROOT_VALUE(v) gc_push_value_root(&(v))
+#define GC_UNROOT_VALUE() gc_pop_value_root()
+#define GC_ROOT_ENV(e) gc_push_env_root(&(e))
+#define GC_UNROOT_ENV() gc_pop_env_root()
+
+static void gc_maybe_collect(void);
+
 static Value *val_new(VT type) {
+    gc_maybe_collect();
     Value *v = xmalloc(sizeof(Value));
     memset(v, 0, sizeof(*v));
     v->type = type;
     v->refcount = 1;
+    v->gc_mark = 0;
+    v->gc_next = g_all_values;
+    g_all_values = v;
+    g_gc_allocations++;
     return v;
 }
 
@@ -1282,8 +1363,13 @@ static Value *val_str(const char *s){ Value *v=val_new(VT_STR); v->sval=xstrdup(
 static Value *val_str_own(char *s){ Value *v=val_new(VT_STR); v->sval=s; return v; }
 
 static HowMap *map_new(void) {
+    gc_maybe_collect();
     HowMap *m = xmalloc(sizeof(*m));
     m->pairs=NULL; m->len=m->cap=0; m->refcount=1;
+    m->gc_mark = 0;
+    m->gc_next = g_all_maps;
+    g_all_maps = m;
+    g_gc_allocations++;
     return m;
 }
 
@@ -1292,8 +1378,13 @@ static Value *val_map(HowMap *m) {
 }
 
 static HowList *list_new(void) {
+    gc_maybe_collect();
     HowList *l = xmalloc(sizeof(*l));
     l->items=NULL; l->len=l->cap=0; l->refcount=1;
+    l->gc_mark = 0;
+    l->gc_next = g_all_lists;
+    g_all_lists = l;
+    g_gc_allocations++;
     return l;
 }
 
@@ -1308,74 +1399,68 @@ static Value *val_list(HowList *l) {
 static void val_decref(Value *v);
 
 static void map_decref(HowMap *m) {
-    if (!m || --m->refcount > 0) return;
-    for (int i=0;i<m->len;i++) {
-        free(m->pairs[i].key);
-        val_decref(m->pairs[i].val);
-    }
-    free(m->pairs);
-    free(m);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!m) return;
+    m->refcount--;
 }
 
+
 static void list_decref(HowList *l) {
-    if (!l || --l->refcount > 0) return;
-    for (int i=0;i<l->len;i++) val_decref(l->items[i]);
-    free(l->items);
-    free(l);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!l) return;
+    l->refcount--;
 }
+
 
 /* forward decl */
 static void env_decref(Env *e);
 
 static void func_decref(HowFunc *f) {
-    if (!f || --f->refcount > 0) return;
-    return;  /* SAFETY: never free HowFunc to prevent UAF */
-    for (int i=0;i<f->params.len;i++) free(f->params.s[i]);
-    free(f->params.s);
-    /* branches are AST nodes — not freed here (AST lifetime = program lifetime) */
-    env_decref(f->closure);
-    free(f);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!f) return;
+    f->refcount--;
 }
+
 
 static void cls_decref(HowClass *c) {
-    if (!c || --c->refcount > 0) return;
-    for (int i=0;i<c->params.len;i++) free(c->params.s[i]);
-    free(c->params.s);
-    env_decref(c->closure);
-    free(c);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!c) return;
+    c->refcount--;
 }
+
 
 static void inst_decref(HowInstance *inst) {
-    if (!inst || --inst->refcount > 0) return;
-    map_decref(inst->fields);
-    env_decref(inst->inst_env);
-    free(inst);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!inst) return;
+    inst->refcount--;
 }
+
 
 static void mod_decref(HowModule *m) {
-    if (!m || --m->refcount > 0) return;
-    free(m->name);
-    env_decref(m->env);
-    free(m);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!m) return;
+    m->refcount--;
 }
+
 
 static void val_decref(Value *v) {
-    if (!v || --v->refcount > 0) return;
-    switch (v->type) {
-        case VT_STR:      free(v->sval); break;
-        case VT_LIST:     list_decref(v->list); break;
-        case VT_MAP:      map_decref(v->map); break;
-        case VT_FUNC:     func_decref(v->func); break;
-        case VT_CLASS:    cls_decref(v->cls); break;
-        case VT_INSTANCE: inst_decref(v->inst); break;
-        case VT_MODULE:   mod_decref(v->mod); break;
-        case VT_BUILTIN:  free(v->builtin.name); break;
-        default: break;
-    }
-    free(v);
+    if (!v) return;
+    v->refcount--;
 }
 
+
 static Value *val_incref(Value *v) { if(v) v->refcount++; return v; }
+
+static StrList strlist_clone(StrList src) {
+    StrList out = {0};
+    out.len = src.len;
+    out.cap = src.len;
+    if (src.len > 0) {
+        out.s = xmalloc(sizeof(char*) * src.len);
+        for (int i = 0; i < src.len; i++) out.s[i] = xstrdup(src.s[i]);
+    }
+    return out;
+}
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Environment                                                                 */
@@ -1389,15 +1474,22 @@ struct Env {
     int       cap;
     Env      *parent;
     int       refcount;
+    int       gc_mark;
+    struct Env *gc_next;
     /* for InstanceEnv */
     HowInstance *inst;  /* non-NULL if this is an InstanceEnv */
 };
 
 static Env *env_new(Env *parent) {
+    gc_maybe_collect();
     Env *e = xmalloc(sizeof(*e));
     e->entries=NULL; e->len=e->cap=0;
     e->parent  = parent; if(parent) parent->refcount++;
     e->refcount=1;
+    e->gc_mark = 0;
+    e->gc_next = g_all_envs;
+    g_all_envs = e;
+    g_gc_allocations++;
     e->inst=NULL;
     return e;
 }
@@ -1409,16 +1501,11 @@ static Env *inst_env_new(HowInstance *inst, Env *parent) {
 }
 
 static void env_decref(Env *e) {
-    if (!e || --e->refcount > 0) return;
-    return;  /* SAFETY: never free envs to prevent UAF */
-    for (int i=0;i<e->len;i++) {
-        free(e->entries[i].key);
-        val_decref(e->entries[i].val);
-    }
-    free(e->entries);
-    if (e->parent) env_decref(e->parent);
-    free(e);
+    /* tracing GC: reclamation happens in gc_collect(), not here */
+    if (!e) return;
+    e->refcount--;
 }
+
 
 /* set (always in local scope) */
 static void env_set(Env *e, const char *key, Value *val) {
@@ -1678,9 +1765,10 @@ static char *find_how_file(const char *name) {
 
 /* Control flow signals via longjmp */
 #include <setjmp.h>
+#define UNUSED(x) (void)(x)
 
 typedef struct SignalReturn { Value *val; } SignalReturn;
-typedef struct SignalBreak  {}              SignalBreak;
+typedef struct SignalBreak  { int dummy; } SignalBreak;
 
 /* We use a linked list of "signal frames" instead of exceptions */
 typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK } SigType;
@@ -1929,6 +2017,34 @@ BUILTIN(read_fn) {
     return val_str_own(buf);
 }
 
+static void write_value_to_path(const char *path, Value *v) {
+    FILE *f = fopen(path, "w");
+    if (!f) die("write(): cannot open '%s' for writing: %s", path, strerror(errno));
+    if (v->type == VT_STR) {
+        if (fwrite(v->sval, 1, strlen(v->sval), f) < strlen(v->sval)) {
+            fclose(f);
+            die("write(): failed writing '%s'", path);
+        }
+    } else {
+        char *s = val_repr(v);
+        size_t n = strlen(s);
+        if (fwrite(s, 1, n, f) < n) {
+            free(s);
+            fclose(f);
+            die("write(): failed writing '%s'", path);
+        }
+        free(s);
+    }
+    fclose(f);
+}
+
+BUILTIN(write_fn) {
+    NEED(2);
+    if (ARG(0)->type!=VT_STR) die("write() requires a string path as first argument");
+    write_value_to_path(ARG(0)->sval, ARG(1));
+    return val_incref(ARG(1));
+}
+
 BUILTIN(args_fn) {
     /* argv is set in main */
     return val_incref(env_get(g_globals,"__args"));
@@ -2049,7 +2165,16 @@ BUILTIN(min_fn) {
 }
 
 BUILTIN(quit_fn) {
+    (void)argc; (void)argv; (void)ctx;
     exit(0);
+}
+
+static void gc_collect(Env *root_env);
+
+BUILTIN(gc_fn) {
+    (void)argc; (void)argv; (void)ctx;
+    gc_collect(g_globals);
+    return val_none();
 }
 
 /* _host_call(fn, args_list) — call a native host function with a HowList of args */
@@ -2076,6 +2201,252 @@ static Value *make_builtin(const char *name, BuiltinFn fn) {
     return v;
 }
 
+
+static void gc_mark_value(Value *v);
+static void gc_mark_env(Env *e);
+static void gc_mark_map(HowMap *m);
+static void gc_mark_list(HowList *l);
+static void gc_mark_func(HowFunc *f);
+static void gc_mark_class(HowClass *c);
+static void gc_mark_instance(HowInstance *inst);
+static void gc_mark_module(HowModule *m);
+
+static void gc_mark_value(Value *v) {
+    if (!v || v->gc_mark) return;
+    v->gc_mark = 1;
+    switch (v->type) {
+        case VT_LIST: gc_mark_list(v->list); break;
+        case VT_MAP: gc_mark_map(v->map); break;
+        case VT_FUNC: gc_mark_func(v->func); break;
+        case VT_CLASS: gc_mark_class(v->cls); break;
+        case VT_INSTANCE: gc_mark_instance(v->inst); break;
+        case VT_MODULE: gc_mark_module(v->mod); break;
+        default: break;
+    }
+}
+
+static void gc_mark_map(HowMap *m) {
+    if (!m || m->gc_mark) return;
+    m->gc_mark = 1;
+    for (int i = 0; i < m->len; i++) gc_mark_value(m->pairs[i].val);
+}
+
+static void gc_mark_list(HowList *l) {
+    if (!l || l->gc_mark) return;
+    l->gc_mark = 1;
+    for (int i = 0; i < l->len; i++) gc_mark_value(l->items[i]);
+}
+
+static void gc_mark_func(HowFunc *f) {
+    if (!f || f->gc_mark) return;
+    f->gc_mark = 1;
+    gc_mark_env(f->closure);
+}
+
+static void gc_mark_class(HowClass *c) {
+    if (!c || c->gc_mark) return;
+    c->gc_mark = 1;
+    gc_mark_env(c->closure);
+}
+
+static void gc_mark_instance(HowInstance *inst) {
+    if (!inst || inst->gc_mark) return;
+    inst->gc_mark = 1;
+    gc_mark_map(inst->fields);
+    gc_mark_env(inst->inst_env);
+}
+
+static void gc_mark_module(HowModule *m) {
+    if (!m || m->gc_mark) return;
+    m->gc_mark = 1;
+    gc_mark_env(m->env);
+}
+
+static void gc_mark_env(Env *e) {
+    if (!e || e->gc_mark) return;
+    e->gc_mark = 1;
+    gc_mark_env(e->parent);
+    if (e->inst) gc_mark_instance(e->inst);
+    for (int i = 0; i < e->len; i++) gc_mark_value(e->entries[i].val);
+}
+
+static void gc_sweep_values(void) {
+    Value **pp = &g_all_values;
+    while (*pp) {
+        Value *v = *pp;
+        if (v->gc_mark) {
+            v->gc_mark = 0;
+            pp = &v->gc_next;
+            continue;
+        }
+        *pp = v->gc_next;
+        if (v == V_NONE_SINGLETON) V_NONE_SINGLETON = NULL;
+        if (v == V_TRUE_SINGLETON) V_TRUE_SINGLETON = NULL;
+        if (v == V_FALSE_SINGLETON) V_FALSE_SINGLETON = NULL;
+        if (v->type == VT_STR) free(v->sval);
+        else if (v->type == VT_BUILTIN) free(v->builtin.name);
+        free(v);
+    }
+}
+
+static void gc_sweep_maps(void) {
+    HowMap **pp = &g_all_maps;
+    while (*pp) {
+        HowMap *m = *pp;
+        if (m->gc_mark) {
+            m->gc_mark = 0;
+            pp = &m->gc_next;
+            continue;
+        }
+        *pp = m->gc_next;
+        for (int i = 0; i < m->len; i++) free(m->pairs[i].key);
+        free(m->pairs);
+        free(m);
+    }
+}
+
+static void gc_sweep_lists(void) {
+    HowList **pp = &g_all_lists;
+    while (*pp) {
+        HowList *l = *pp;
+        if (l->gc_mark) {
+            l->gc_mark = 0;
+            pp = &l->gc_next;
+            continue;
+        }
+        *pp = l->gc_next;
+        free(l->items);
+        free(l);
+    }
+}
+
+static void gc_sweep_funcs(void) {
+    HowFunc **pp = &g_all_funcs;
+    while (*pp) {
+        HowFunc *f = *pp;
+        if (f->gc_mark) {
+            f->gc_mark = 0;
+            pp = &f->gc_next;
+            continue;
+        }
+        *pp = f->gc_next;
+        for (int i = 0; i < f->params.len; i++) free(f->params.s[i]);
+        free(f->params.s);
+        free(f);
+    }
+}
+
+static void gc_sweep_classes(void) {
+    HowClass **pp = &g_all_classes;
+    while (*pp) {
+        HowClass *c = *pp;
+        if (c->gc_mark) {
+            c->gc_mark = 0;
+            pp = &c->gc_next;
+            continue;
+        }
+        *pp = c->gc_next;
+        for (int i = 0; i < c->params.len; i++) free(c->params.s[i]);
+        free(c->params.s);
+        free(c);
+    }
+}
+
+static void gc_sweep_instances(void) {
+    HowInstance **pp = &g_all_instances;
+    while (*pp) {
+        HowInstance *inst = *pp;
+        if (inst->gc_mark) {
+            inst->gc_mark = 0;
+            pp = &inst->gc_next;
+            continue;
+        }
+        *pp = inst->gc_next;
+        free(inst);
+    }
+}
+
+static void gc_sweep_modules(void) {
+    HowModule **pp = &g_all_modules;
+    while (*pp) {
+        HowModule *m = *pp;
+        if (m->gc_mark) {
+            m->gc_mark = 0;
+            pp = &m->gc_next;
+            continue;
+        }
+        *pp = m->gc_next;
+        free(m->name);
+        free(m);
+    }
+}
+
+static void gc_sweep_envs(void) {
+    Env **pp = &g_all_envs;
+    while (*pp) {
+        Env *e = *pp;
+        if (e->gc_mark) {
+            e->gc_mark = 0;
+            pp = &e->gc_next;
+            continue;
+        }
+        *pp = e->gc_next;
+        for (int i = 0; i < e->len; i++) free(e->entries[i].key);
+        free(e->entries);
+        free(e);
+    }
+}
+
+static void gc_clear_root_stacks(void) {
+    g_gc_value_roots.len = 0;
+    g_gc_env_roots.len = 0;
+}
+
+static void gc_mark_root_stacks(void) {
+    for (int i = 0; i < g_gc_value_roots.len; i++) {
+        Value **slot = g_gc_value_roots.slots[i];
+        if (slot && *slot) gc_mark_value(*slot);
+    }
+    for (int i = 0; i < g_gc_env_roots.len; i++) {
+        Env **slot = g_gc_env_roots.slots[i];
+        if (slot && *slot) gc_mark_env(*slot);
+    }
+}
+
+static void gc_collect(Env *root_env) {
+    if (g_gc_in_progress) return;
+    g_gc_in_progress = 1;
+    if (V_NONE_SINGLETON) gc_mark_value(V_NONE_SINGLETON);
+    if (V_TRUE_SINGLETON) gc_mark_value(V_TRUE_SINGLETON);
+    if (V_FALSE_SINGLETON) gc_mark_value(V_FALSE_SINGLETON);
+    gc_mark_root_stacks();
+    gc_mark_env(root_env);
+    if (g_globals && g_globals != root_env) gc_mark_env(g_globals);
+    gc_sweep_values();
+    gc_sweep_maps();
+    gc_sweep_lists();
+    gc_sweep_funcs();
+    gc_sweep_classes();
+    gc_sweep_instances();
+    gc_sweep_modules();
+    gc_sweep_envs();
+    g_gc_collections++;
+    g_gc_last_collect_allocs = g_gc_allocations;
+    g_gc_in_progress = 0;
+}
+
+static void gc_maybe_collect(void) {
+    if (g_gc_in_progress) return;
+    if (g_gc_allocations - g_gc_last_collect_allocs < g_gc_threshold) return;
+    Env *root = g_globals;
+    if (g_gc_env_roots.len > 0 && g_gc_env_roots.slots[g_gc_env_roots.len-1]) {
+        Env **slot = g_gc_env_roots.slots[g_gc_env_roots.len-1];
+        if (slot && *slot) root = *slot;
+    }
+    gc_collect(root);
+}
+
+
 static void setup_globals(Env *env) {
 #define REG(name,fn) env_set(env,name,make_builtin(name,builtin_##fn))
     REG("print",   print);
@@ -2100,6 +2471,7 @@ static void setup_globals(Env *env) {
     REG("range",   range_fn);
     REG("ask",     ask_fn);
     REG("read",    read_fn);
+    REG("write",   write_fn);
     REG("args",    args_fn);
     REG("dirof",   dirof_fn);
     REG("_resolve_how",     resolve_how_fn);
@@ -2108,6 +2480,7 @@ static void setup_globals(Env *env) {
     REG("max",     max_fn);
     REG("min",     min_fn);
     REG("quit",    quit_fn);
+    REG("gc",      gc_fn);
     REG("_host_call",      host_call_fn);
     REG("_add_search_dir", add_search_dir_fn);
     REG("_basename", basename_fn);
@@ -2125,36 +2498,40 @@ static void setup_globals(Env *env) {
 
 /* augmented assignment helper */
 static Value *apply_augop(Value *old, Value *val, const char *op, int line) {
+    GC_ROOT_VALUE(old);
+    GC_ROOT_VALUE(val);
     if (!strcmp(op,"+=")) {
         if (old->type==VT_STR || val->type==VT_STR) {
             char *a = val_repr(old), *b = val_repr(val);
             Buf buf={0}; buf_append(&buf,a); buf_append(&buf,b);
             free(a); free(b);
-            return val_str_own(buf_done(&buf));
+            Value *ret = val_str_own(buf_done(&buf)); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
         }
         if (old->type==VT_LIST && val->type==VT_LIST) {
             HowList *nl = list_new();
             for (int i=0;i<old->list->len;i++) list_push(nl,old->list->items[i]);
             for (int i=0;i<val->list->len;i++) list_push(nl,val->list->items[i]);
-            Value *r = val_list(nl); list_decref(nl); return r;
+            Value *r = val_list(nl); list_decref(nl); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return r;
         }
         if (old->type!=VT_NUM||val->type!=VT_NUM) die("+= requires numbers or strings (line %d)",line);
-        return val_num(old->nval + val->nval);
+        Value *ret = val_num(old->nval + val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     if (!strcmp(op,"-=")) {
         if (old->type!=VT_NUM||val->type!=VT_NUM) die("-= requires numbers (line %d)",line);
-        return val_num(old->nval - val->nval);
+        Value *ret = val_num(old->nval - val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     if (!strcmp(op,"*=")) {
         if (old->type!=VT_NUM||val->type!=VT_NUM) die("*= requires numbers (line %d)",line);
-        return val_num(old->nval * val->nval);
+        Value *ret = val_num(old->nval * val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     if (!strcmp(op,"/=")) {
         if (old->type!=VT_NUM||val->type!=VT_NUM) die("/= requires numbers (line %d)",line);
         if (val->nval==0) die("division by zero (line %d)",line);
-        return val_num(old->nval / val->nval);
+        Value *ret = val_num(old->nval / val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     die("unknown augop %s (line %d)",op,line);
+    GC_UNROOT_VALUE();
+    GC_UNROOT_VALUE();
     return val_none();
 }
 
@@ -2194,8 +2571,10 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         }
         Value *l = eval(node->binop.left, env, sig);
         if (sig->type!=SIG_NONE) return l;
+        GC_ROOT_VALUE(l);
         Value *r = eval(node->binop.right, env, sig);
-        if (sig->type!=SIG_NONE) { val_decref(l); return r; }
+        if (sig->type!=SIG_NONE) { GC_UNROOT_VALUE(); val_decref(l); return r; }
+        GC_ROOT_VALUE(r);
         Value *res;
         if (!strcmp(op,"+")) {
             if (l->type==VT_LIST && r->type==VT_LIST) {
@@ -2252,6 +2631,8 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             die("unknown binop %s (line %d)",op,node->line);
             res=val_none();
         }
+        GC_UNROOT_VALUE();
+        GC_UNROOT_VALUE();
         val_decref(l); val_decref(r);
         return res;
     }
@@ -2259,6 +2640,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     case N_UNARY: {
         Value *v = eval(node->binop.left, env, sig);
         if (sig->type!=SIG_NONE) return v;
+        GC_ROOT_VALUE(v);
         const char *op = node->binop.op;
         Value *res;
         if (!strcmp(op,"-")) {
@@ -2267,12 +2649,14 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         } else {
             res=val_bool(!how_truthy(v));
         }
+        GC_UNROOT_VALUE();
         val_decref(v); return res;
     }
 
     case N_ASSIGN: {
         Value *val = eval(node->assign.value, env, sig);
         if (sig->type!=SIG_NONE) return val;
+        GC_ROOT_VALUE(val);
         Node *tgt = node->assign.target;
         const char *op = node->assign.op;
 
@@ -2288,12 +2672,14 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 val_decref(val); val_decref(newv);
                 return val_none();
             }
+            GC_UNROOT_VALUE();
             val_decref(val); return val_none();
         }
 
         if (tgt->type == N_DOT) {
             Value *obj = eval(tgt->dot.obj, env, sig);
-            if (sig->type!=SIG_NONE) { val_decref(val); return obj; }
+            GC_ROOT_VALUE(obj);
+            if (sig->type!=SIG_NONE) { GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); val_decref(val); return obj; }
             const char *attr = tgt->dot.attr;
             HowMap *fields = NULL;
             if (obj->type==VT_INSTANCE) fields=obj->inst->fields;
@@ -2308,9 +2694,12 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 map_set(fields, attr, newv);
                 val_decref(newv);
             }
+            GC_UNROOT_VALUE();
+            GC_UNROOT_VALUE();
             val_decref(obj); val_decref(val);
             return val_none();
         }
+        GC_UNROOT_VALUE();
         die("invalid assignment target (line %d)", node->line);
         return val_none();
     }
@@ -2318,6 +2707,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     case N_DOT: {
         Value *obj = eval(node->dot.obj, env, sig);
         if (sig->type!=SIG_NONE) return obj;
+        GC_ROOT_VALUE(obj);
         const char *attr = node->dot.attr;
         Value *res = NULL;
         if (obj->type==VT_INSTANCE) {
@@ -2336,6 +2726,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             die("cannot access .%s on %s (line %d)",attr,
                 obj->type==VT_NONE?"none":obj->type==VT_NUM?"number":"value", node->line);
         }
+        GC_UNROOT_VALUE();
         val_decref(obj);
         return res;
     }
@@ -2343,19 +2734,24 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     case N_CALL: {
         Value *callee = eval(node->call.callee, env, sig);
         if (sig->type!=SIG_NONE) return callee;
+        GC_ROOT_VALUE(callee);
         int argc = node->call.args.len;
         Value **args = xmalloc(argc * sizeof(Value*) + 1);
         for (int i=0;i<argc;i++) {
+            args[i] = NULL;
             args[i] = eval(node->call.args.nodes[i], env, sig);
+            if (sig->type==SIG_NONE) GC_ROOT_VALUE(args[i]);
             if (sig->type!=SIG_NONE) {
-                for(int j=0;j<i;j++) val_decref(args[j]);
-                free(args); val_decref(callee); return args[i];
+                Value *errv = args[i];
+                for(int j=0;j<i;j++) { GC_UNROOT_VALUE(); val_decref(args[j]); }
+                free(args); GC_UNROOT_VALUE(); val_decref(callee); return errv;
             }
         }
         callee->refcount++;  /* hold extra ref so callee survives the call */
         Value *res = eval_call_val(callee, args, argc, sig, node->line);
-        for (int i=0;i<argc;i++) val_decref(args[i]);
+        for (int i=0;i<argc;i++) { GC_UNROOT_VALUE(); val_decref(args[i]); }
         free(args);
+        GC_UNROOT_VALUE();
         val_decref(callee);  /* release the extra ref */
         val_decref(callee);  /* release the original eval ref */
         return res;
@@ -2364,10 +2760,16 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     case N_SLICE: {
         Value *col = eval(node->slice.col, env, sig);
         if (sig->type!=SIG_NONE) return col;
+        GC_ROOT_VALUE(col);
         Value *start_v = node->slice.start ? eval(node->slice.start, env, sig) : NULL;
-        if (sig->type!=SIG_NONE) { val_decref(col); return start_v ? start_v : val_none(); }
+        if (start_v) GC_ROOT_VALUE(start_v);
+        if (sig->type!=SIG_NONE) { if (start_v) GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); val_decref(col); return start_v ? start_v : val_none(); }
         Value *stop_v  = node->slice.stop  ? eval(node->slice.stop,  env, sig) : NULL;
+        if (stop_v) GC_ROOT_VALUE(stop_v);
         if (sig->type!=SIG_NONE) {
+            if (stop_v) GC_UNROOT_VALUE();
+            if (start_v) GC_UNROOT_VALUE();
+            GC_UNROOT_VALUE();
             val_decref(col); if(start_v) val_decref(start_v);
             return stop_v ? stop_v : val_none();
         }
@@ -2382,7 +2784,9 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             res=val_list(nl); list_decref(nl);
         } else if (col->type==VT_STR) {
             int slen=strlen(col->sval);
-            if(start<0) start=0; if(stop>slen) stop=slen; if(stop<start) stop=start;
+            if (start < 0) start = 0;
+            if (stop > slen) stop = slen;
+            if (stop < start) stop = start;
             char *s=xmalloc(stop-start+1);
             memcpy(s,col->sval+start,stop-start); s[stop-start]=0;
             res=val_str_own(s);
@@ -2390,27 +2794,34 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             die("cannot slice this type (line %d)",node->line);
             res=val_none();
         }
+        if(stop_v) GC_UNROOT_VALUE();
+        if(start_v) GC_UNROOT_VALUE();
+        GC_UNROOT_VALUE();
         val_decref(col); if(start_v) val_decref(start_v); if(stop_v) val_decref(stop_v);
         return res;
     }
 
     case N_FUNC: {
         HowFunc *fn = xmalloc(sizeof(*fn));
-        fn->params   = node->func.params;
+        memset(fn, 0, sizeof(*fn));
+        fn->params   = strlist_clone(node->func.params);
         fn->branches = node->func.branches;
         fn->closure  = env; env->refcount++;
         fn->is_loop  = node->func.is_loop;
         fn->refcount = 1;
+        fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
         Value *v = val_new(VT_FUNC); v->func = fn;
         return v;
     }
 
     case N_CLASS: {
         HowClass *cls = xmalloc(sizeof(*cls));
-        cls->params   = node->func.params;
+        memset(cls, 0, sizeof(*cls));
+        cls->params   = strlist_clone(node->func.params);
         cls->branches = node->func.branches;
         cls->closure  = env; env->refcount++;
         cls->refcount = 1;
+        cls->gc_next = g_all_classes; g_all_classes = cls; g_gc_allocations++;
         Value *v = val_new(VT_CLASS); v->cls = cls;
         return v;
     }
@@ -2456,11 +2867,13 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
 
     case N_BLOCK: {
         Env *child = env_new(env);
+        GC_ROOT_ENV(child);
         for (int i=0;i<node->block.stmts.len;i++) {
             Node *s = node->block.stmts.nodes[i];
             exec_stmt(s, child, sig);
             if (sig->type!=SIG_NONE) break;
         }
+        GC_UNROOT_ENV();
         env_decref(child);
         return val_none();
     }
@@ -2513,9 +2926,11 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
         Env *closure = fn->closure;
         if (closure) closure->refcount++;
         Env *local = env_new(fn->closure);
+        GC_ROOT_ENV(local);
         for (int i=0;i<fn->params.len;i++)
             env_set(local, fn->params.s[i], args[i]);
         run_branches(&fn->branches, local, sig);
+        GC_UNROOT_ENV();
         env_decref(local);
         if (closure) env_decref(closure);  /* release our extra hold */
         Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();
@@ -2569,10 +2984,12 @@ static void exec_stmt(Node *node, Env *env, Signal *sig) {
         return;
     case N_BLOCK: {
         Env *child = env_new(env);
+        GC_ROOT_ENV(child);
         for (int i=0;i<node->block.stmts.len;i++) {
             exec_stmt(node->block.stmts.nodes[i], child, sig);
             if (sig->type!=SIG_NONE) break;
         }
+        GC_UNROOT_ENV();
         env_decref(child);
         return;
     }
@@ -2612,10 +3029,12 @@ static void exec_body(Node *body, Env *env, Signal *sig) {
     if (!body || sig->type!=SIG_NONE) return;
     if (body->type==N_BLOCK) {
         Env *child = env_new(env);
+        GC_ROOT_ENV(child);
         for (int i=0;i<body->block.stmts.len;i++) {
             exec_stmt(body->block.stmts.nodes[i], child, sig);
             if (sig->type!=SIG_NONE) break;
         }
+        GC_UNROOT_ENV();
         env_decref(child);
     } else if (body->type==N_BREAK) {
         sig->type = SIG_BREAK;
@@ -2635,6 +3054,7 @@ static void run_branches(NodeList *branches, Env *env, Signal *sig) {
 /* Unbounded (:)= loop */
 static void run_loop(HowFunc *fn, Signal *sig) {
 Env *local = env_new(fn->closure);
+    GC_ROOT_ENV(local);
     while (sig->type==SIG_NONE) {
         int conditional_fired = 0;
         for (int i=0;i<fn->branches.len && sig->type==SIG_NONE;i++) {
@@ -2678,6 +3098,7 @@ Env *local = env_new(fn->closure);
         }
     }
     loop_done:
+    GC_UNROOT_ENV();
     env_decref(local);
 }
 
@@ -2698,7 +3119,9 @@ static Value *run_for_loop(Node *node, Env *env, Signal *sig) {
     /* split body vs return branches */
 
     Env *local = env_new(env);
+    GC_ROOT_ENV(local);
     Value *result = val_none();
+    GC_ROOT_VALUE(result);
 
     for (int i=start_v; i<stop_v; i++) {
         Value *iv = val_num((double)i);
@@ -2748,6 +3171,8 @@ static Value *run_for_loop(Node *node, Env *env, Signal *sig) {
         }
     }
     for_done:
+    GC_UNROOT_VALUE();
+    GC_UNROOT_ENV();
     env_decref(local);
     return result;
 }
@@ -2758,6 +3183,7 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
         die("class expects %d args but got %d", cls->params.len, argc);
 
     Env *init_env = env_new(cls->closure);
+    GC_ROOT_ENV(init_env);
     for (int i=0;i<cls->params.len;i++)
         env_set(init_env, cls->params.s[i], args[i]);
 
@@ -2804,11 +3230,14 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
     }
 
     HowInstance *inst = xmalloc(sizeof(*inst));
+    memset(inst, 0, sizeof(*inst));
     inst->fields   = fields; fields->refcount++;
     inst->refcount = 1;
+    inst->gc_next = g_all_instances; g_all_instances = inst; g_gc_allocations++;
 
     /* InstanceEnv: variables are backed by fields */
     Env *inst_env = inst_env_new(inst, init_env);
+    GC_ROOT_ENV(inst_env);
     inst->inst_env = inst_env; inst_env->refcount++;
 
     /* Re-wrap method closures so they close over inst_env */
@@ -2816,40 +3245,31 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
         Value *v = fields->pairs[i].val;
         if (v && v->type==VT_FUNC) {
             HowFunc *oldfn = v->func;
-            /* Copy params/branches BEFORE decref-ing old value */
-            StrList   saved_params   = oldfn->params;
+            StrList   saved_params   = strlist_clone(oldfn->params);
             NodeList  saved_branches = oldfn->branches;
             int       saved_is_loop  = oldfn->is_loop;
-            /* Incref inst_env first */
             inst_env->refcount++;
-            /* Build the new wrapper */
             HowFunc *newfn = xmalloc(sizeof(*newfn));
+            memset(newfn, 0, sizeof(*newfn));
             newfn->params   = saved_params;
             newfn->branches = saved_branches;
             newfn->is_loop  = saved_is_loop;
             newfn->closure  = inst_env;
             newfn->refcount = 1;
+            newfn->gc_next = g_all_funcs; g_all_funcs = newfn; g_gc_allocations++;
             Value *nv = val_new(VT_FUNC); nv->func = newfn;
-            /* Replace: old value had refcount=1 from fields map.
-               We set fields[i] = nv. The old v still has refcount=1
-               (map_set did incref when storing, we need to balance).
-               To avoid freeing oldfn whose params/branches newfn shares,
-               we just set v's func to NULL before decref. */
-            oldfn->params.s   = NULL;   /* prevent func_decref from freeing shared data */
-            oldfn->params.len = 0;
-            oldfn->branches.nodes = NULL;
-            oldfn->branches.len   = 0;
-            oldfn->closure = NULL;      /* prevent env_decref on shared closure */
             fields->pairs[i].val = nv;
             val_decref(v);
         }
     }
 
     map_decref(fields);
+    GC_UNROOT_ENV();
     env_decref(init_env);
 
     Value *result = val_new(VT_INSTANCE);
     result->inst = inst;
+    GC_UNROOT_ENV();
     return result;
 }
 
@@ -2914,6 +3334,7 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
 
     /* run in fresh env with copy of builtins */
     Env *mod_env = env_new(NULL);
+    GC_ROOT_ENV(mod_env);
     /* copy builtins from globals */
     for (int i=0;i<g_globals->len;i++)
         env_set(mod_env, g_globals->entries[i].key, g_globals->entries[i].val);
@@ -2926,9 +3347,12 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
 
     /* Build module value */
     HowModule *mod = xmalloc(sizeof(*mod));
+    memset(mod, 0, sizeof(*mod));
     mod->name = xstrdup(modname);
+    mod->gc_next = g_all_modules; g_all_modules = mod; g_gc_allocations++;
     /* expose non-builtin vars in a clean env */
     Env *pub_env = env_new(NULL);
+    GC_ROOT_ENV(pub_env);
     for (int i=0;i<mod_env->len;i++) {
         /* skip true builtins (not user-imported vars that ended up in g_globals) */
         int is_builtin = 0;
@@ -2955,7 +3379,14 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     const char *final_name = (alias && alias[0]) ? alias : bind_name;
     env_set(env, final_name, modval);
     val_decref(modval);
+    GC_UNROOT_ENV();
     env_decref(mod_env);
+    GC_UNROOT_ENV();
+    gc_clear_root_stacks();
+    GC_ROOT_ENV(env);
+    gc_collect(env);
+    GC_UNROOT_ENV();
+    GC_UNROOT_ENV();
 }
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -3042,7 +3473,15 @@ static void run_source(const char *src, Env *env) {
             sig.retval=NULL;
         }
         sig.type=SIG_NONE;
+        gc_clear_root_stacks();
+        GC_ROOT_ENV(env);
+        gc_collect(env);
+        GC_UNROOT_ENV();
     }
+    gc_clear_root_stacks();
+    GC_ROOT_ENV(env);
+    gc_collect(env);
+    GC_UNROOT_ENV();
 }
 
 
@@ -3329,6 +3768,13 @@ int main(int argc, char **argv) {
     for (int i=1;i<argc;i++) list_push(args_list, val_str(argv[i]));
     Value *args_val = val_list(args_list); list_decref(args_list);
     env_set(g_globals, "__args", args_val);
+    env_set(g_globals, "__argv", args_val);
+    Value *imp_false = val_bool(0);
+    env_set(g_globals, "__is_import", imp_false);
+    val_decref(imp_false);
+    Value *file_val = (argc >= 2) ? val_str(argv[1]) : val_none();
+    env_set(g_globals, "__file", file_val);
+    val_decref(file_val);
     val_decref(args_val);
 
     /* Add cwd to import dirs */
@@ -3336,6 +3782,13 @@ int main(int argc, char **argv) {
 
     if (argc < 2) {
         repl(g_globals);
+        gc_clear_root_stacks();
+        GC_ROOT_ENV(g_globals);
+        gc_collect(g_globals);
+        GC_UNROOT_ENV();
+        g_globals = NULL;
+        gc_clear_root_stacks();
+        gc_collect(NULL);
         return 0;
     }
 

@@ -90,6 +90,7 @@ var make_globals = (){
     env_set(g, "has_key",  {"tag": "builtin", "name": "has_key"}),
     env_set(g, "ask",      {"tag": "builtin", "name": "ask"}),
     env_set(g, "args",     {"tag": "builtin", "name": "args"}),
+    env_set(g, "write",    {"tag": "builtin", "name": "write"}),
     env_set(g, "dirof",    {"tag": "builtin", "name": "dirof"}),
     env_set(g, "_resolve_how",        {"tag": "builtin", "name": "_resolve_how"}),
     env_set(g, "del_key",    {"tag": "builtin", "name": "del_key"}),
@@ -108,6 +109,7 @@ var make_globals = (){
     env_set(g, "_meta_parse", {"tag": "builtin", "name": "_meta_parse"}),
     env_set(g, "_parse",   {"tag": "builtin", "name": "_meta_parse"}),
     env_set(g, "read",     {"tag": "builtin", "name": "read"}),
+    env_set(g, "write",    {"tag": "builtin", "name": "write"}),
     env_set(g, "set_key",  {"tag": "builtin", "name": "set_key"}),
     env_set(g, "get_key",  {"tag": "builtin", "name": "get_key"}),
     env_set(g, "range",  {"tag": "builtin", "name": "range"}),
@@ -121,6 +123,9 @@ var make_globals = (){
     env_set(g, "true",  true),
     env_set(g, "false", false),
     env_set(g, "none",  none),
+    env_set(g, "__argv", args()),
+    env_set(g, "__is_import", false),
+    env_set(g, "__file", none),
     :: g
 }
 
@@ -154,6 +159,7 @@ var call_builtin = (name, bargs){
     name == "get_key": { :: ok_sig(get_key(bargs(0), bargs(1))) },
     name == "ask":     { :: ok_sig(ask(bargs(0))) },
     name == "args":   { :: ok_sig(args()) },
+    name == "write":  { :: ok_sig(write(bargs(0), meta_repr(bargs(1)))) },
     name == "dirof":         { :: ok_sig(dirof(bargs(0))) },
     name == "_resolve_how":        { :: ok_sig(_resolve_how(bargs(0))) },
     name == "del_key":  { del_key(bargs(0), bargs(1)), :: ok_sig(none) },
@@ -411,8 +417,8 @@ eval_node = (node, env){
 
     tag == "how_stmt": {
         var mod_name_raw = node("name"),
-        var alias = node("alias"),   # may be none
-        # Split path: "samples/lru_cache" → add "samples" to search, bind as "lru_cache"
+        var alias = none,
+        has_key(node, "alias"): { alias = node("alias") },
         var mod_name = mod_name_raw,
         type(_basename) == "builtin": {
             var dir_part = _dirname(mod_name_raw),
@@ -422,28 +428,28 @@ eval_node = (node, env){
         },
         var mod_path = _resolve_how(mod_name),
         var mod_src  = read(mod_path),
-        # Resolve _lex and _parse from env so meta versions can override builtins
         var lex_fn   = env_get(env, "_lex"),
         var parse_fn = env_get(env, "_parse"),
-        # Call them: call_fn handles both closures and builtins
-        var lex_args   = list(),
+        var lex_args = list(),
         push(lex_args, mod_src),
-        var r_lex      = call_fn(lex_fn, lex_args),
+        var r_lex = call_fn(lex_fn, lex_args),
         r_lex("sig") != "ok" :: r_lex,
         var mod_tokens = r_lex("val"),
         var parse_args = list(),
         push(parse_args, mod_tokens),
-        var r_parse    = call_fn(parse_fn, parse_args),
+        var r_parse = call_fn(parse_fn, parse_args),
         r_parse("sig") != "ok" :: r_parse,
-        var mod_ast    = r_parse("val"),
-        # Run the module in a fresh env that also has _lex/_parse overrides
-        var mod_g    = make_globals(),
-        set_key(mod_g("vars"), "_lex",   lex_fn),
+        var mod_ast = r_parse("val"),
+        var mod_g = make_globals(),
+        set_key(mod_g("vars"), "_lex", lex_fn),
         set_key(mod_g("vars"), "_parse", parse_fn),
-        var mod_env  = env_new(mod_g),
-        eval_node(mod_ast, mod_env),
-        # Expose all module vars as a map
-        var mod_map  = map(),
+        set_key(mod_g("vars"), "__argv", {mod_path}),
+        set_key(mod_g("vars"), "__is_import", true),
+        set_key(mod_g("vars"), "__file", mod_path),
+        var mod_env = env_new(mod_g),
+        var mod_res = eval_node(mod_ast, mod_env),
+        mod_res("sig") != "ok" :: mod_res,
+        var mod_map = map(),
         var mod_keys = keys(mod_env("vars")),
         var ki = 0,
         var nk = len(mod_keys),
@@ -452,18 +458,14 @@ eval_node = (node, env){
             set_key(mod_map, mod_keys(ki), get_key(mod_env("vars"), mod_keys(ki))),
             ki = ki + 1
         },
-        # Use alias if provided, otherwise use mod_name
         var bind_as = mod_name,
         alias != none: { bind_as = alias },
         env_set(env, bind_as, mod_map),
-        # Also bind each module var directly into the calling env
         var ki2 = 0,
         (:)={
             ki2 >= nk: break,
             var mvar_name = mod_keys(ki2),
-            var mvar_val  = get_key(mod_map, mvar_name),
-            # Do not overwrite the module object itself when an export has the
-            # same name as the module/alias (e.g. module graph exporting class graph).
+            var mvar_val = get_key(mod_map, mvar_name),
             mvar_name != bind_as: { env_set(env, mvar_name, mvar_val) },
             ki2 = ki2 + 1
         },
@@ -474,6 +476,7 @@ eval_node = (node, env){
         _add_search_dir(node("path")),
         :: ok_sig(none)
     },
+
     tag == "var_decl": {
         var r = eval_node(node("val"), env),
         r("sig") != "ok" :: r,
@@ -655,8 +658,8 @@ eval_branches = (branches, env){
 # ── Function call ─────────────────────────────────────────────────────────────
 call_fn = (fn, args){
     # Dispatch builtins (e.g. {tag:"builtin", name:"_lex"})
-    type(fn) == "map" and has_key(fn, "tag") and get_key(fn, "tag") == "builtin": {
-        var bres = call_builtin(get_key(fn, "name"), args),
+    type(fn) == "map" and has_key(fn, "tag") and fn("tag") == "builtin": {
+        var bres = call_builtin(fn("name"), args),
         # call_builtin uses :: which creates {sig:"return", val:ok_sig(...)};
         # unwrap the return layer so caller sees the ok_sig directly
         bres("sig") == "return": { :: bres("val") },
@@ -667,14 +670,14 @@ call_fn = (fn, args){
     type(fn) == "function" or type(fn) == "builtin": {
         :: ok_sig(_host_call(fn, args))
     },
-    get_key(fn, "is_loop"): {
+    fn("is_loop"): {
         # Unbounded loop
-        var local = env_new(get_key(fn, "env")),
+        var local = env_new(fn("env")),
         var loop_result = ok_sig(none),
         var loop_done   = false,
         (:)={
             loop_done: break,
-            var r = eval_branches(get_key(fn, "branches"), local),
+            var r = eval_branches(fn("branches"), local),
             r("sig") == "return": { loop_result = ok_sig(r("val")), loop_done = true },
             r("sig") == "break":  { loop_result = ok_sig(none),     loop_done = true },
             r("sig") == "ok":     none   # keep looping
@@ -682,12 +685,12 @@ call_fn = (fn, args){
         :: loop_result
     },
     # Normal function
-    var local = env_new(get_key(fn, "env")),
+    var local = env_new(fn("env")),
     var pi = 0,
-    (0:len(get_key(fn, "params"))) = pi{
-        env_set(local, get_key(fn, "params")(pi), args(pi))
+    (0:len(fn("params"))) = pi{
+        env_set(local, fn("params")(pi), args(pi))
     },
-    var r = eval_branches(get_key(fn, "branches"), local),
+    var r = eval_branches(fn("branches"), local),
     r("sig") == "return" :: ok_sig(r("val")),
     :: ok_sig(none)
 }
@@ -695,9 +698,9 @@ call_fn = (fn, args){
 # ── Public entry point ────────────────────────────────────────────────────────
 # ── Class instantiation ────────────────────────────────────────────────────────
 var instantiate_class = (cls, args, outer_env){
-    var params   = get_key(cls, "params"),
-    var branches = get_key(cls, "branches"),
-    var cls_env  = get_key(cls, "env"),
+    var params   = cls("params"),
+    var branches = cls("branches"),
+    var cls_env  = cls("env"),
 
     var init_env = env_new(cls_env),
     var pi = 0,
@@ -748,10 +751,10 @@ var instantiate_class = (cls, args, outer_env){
     (0:len(fk)) = ki{
         var k = fk(ki),
         var v = get_key(fields, k),
-        type(v) == "map" and has_key(v, "tag") and get_key(v, "tag") == "closure": {
-            set_key(fields, k, {"tag": "closure", "params": get_key(v, "params"),
-                                 "branches": get_key(v, "branches"), "env": inst_env,
-                                 "is_loop": get_key(v, "is_loop")})
+        type(v) == "map" and has_key(v, "tag") and v("tag") == "closure": {
+            set_key(fields, k, {"tag": "closure", "params": v("params"),
+                                 "branches": v("branches"), "env": inst_env,
+                                 "is_loop": v("is_loop")})
         }
     },
 

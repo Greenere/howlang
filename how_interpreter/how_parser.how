@@ -761,6 +761,7 @@ var p_stmt = (st){
         var pr = p_read_path(st2),
         :: {"node": nd("where_stmt", {"path": pr("path")}), "st": pr("st")}
     },
+
     st_cur(st)("t") == "VAR": {
         var st2  = st_adv(st),
         var name = st_cur(st2)("v"),

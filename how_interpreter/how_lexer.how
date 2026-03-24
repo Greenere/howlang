@@ -13,7 +13,7 @@
 #   "EQ" "PLUSEQ" "MINUSEQ" "STAREQ" "SLASHEQ"
 #   "EQEQ" "NEQ" "LT" "GT" "LTE" "GTE"
 #   "AND" "OR" "NOT"
-#   "BREAK"
+#   "BREAK" "HOW" "WHERE" "AS"
 #   "EOF"
 # ─────────────────────────────────────────────────────────────────────────────
 
