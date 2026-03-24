@@ -1342,16 +1342,17 @@ static void env_decref(Env *e);
 
 static void func_decref(HowFunc *f) {
     if (!f || --f->refcount > 0) return;
-    /* Param names / branch nodes originate from the parser AST and may be
-       shared by multiple closures created from the same function literal.
-       Their lifetime is the whole program, so do not free them here. */
+    for (int i=0;i<f->params.len;i++) free(f->params.s[i]);
+    free(f->params.s);
+    /* branches are AST nodes — not freed here (AST lifetime = program lifetime) */
     env_decref(f->closure);
     free(f);
 }
 
 static void cls_decref(HowClass *c) {
     if (!c || --c->refcount > 0) return;
-    /* Class parameter names also come from parser-owned AST storage. */
+    for (int i=0;i<c->params.len;i++) free(c->params.s[i]);
+    free(c->params.s);
     env_decref(c->closure);
     free(c);
 }
@@ -1619,32 +1620,6 @@ static char *val_repr(Value *v) {
 /*  Truthiness and equality                                                     */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-static const char *value_type_name(Value *v) {
-    if (!v) return "none";
-    switch (v->type) {
-        case VT_NONE: return "none";
-        case VT_BOOL: return "bool";
-        case VT_NUM: return "number";
-        case VT_STR: return "string";
-        case VT_LIST: return "list";
-        case VT_MAP: return "map";
-        case VT_FUNC: return "function";
-        case VT_BUILTIN: return "builtin";
-        case VT_INSTANCE: return "instance";
-        case VT_CLASS: return "class";
-        case VT_MODULE: return "module";
-        default: return "value";
-    }
-}
-
-static void die_bad_plus(const char *op, Value *a, Value *b, int line) {
-    if (a && b && a->type==VT_MAP && b->type==VT_MAP) {
-        die("'%s' is not defined for maps (line %d); note: {} is an empty map, not an empty list. Use list() for an empty list.", op, line);
-    }
-    die("'%s' is not defined for %s and %s (line %d); '+' supports numbers, strings, or list+list.",
-        op, value_type_name(a), value_type_name(b), line);
-}
-
 static int how_truthy(Value *v) {
     if (!v || v->type==VT_NONE) return 0;
     if (v->type==VT_BOOL) return v->bval;
@@ -1885,10 +1860,7 @@ BUILTIN(has_key_fn) {
     if (obj->type==VT_MAP)      m=obj->map;
     else if (obj->type==VT_INSTANCE) m=obj->inst->fields;
     else die("has_key() requires a map, instance, or list");
-    char *ks = val_repr(key);
-    int ok = map_has(m, ks);
-    free(ks);
-    return val_bool(ok);
+    return val_bool(map_has(m, key->sval));
 }
 
 BUILTIN(set_key_fn) {
@@ -1905,9 +1877,8 @@ BUILTIN(set_key_fn) {
     if (obj->type==VT_MAP)      m=obj->map;
     else if (obj->type==VT_INSTANCE) m=obj->inst->fields;
     else die("set_key() requires a map, instance, or list");
-    char *ks = val_repr(key);
-    map_set(m, ks, val);
-    free(ks);
+    if (key->type!=VT_STR) die("set_key() key must be string");
+    map_set(m, key->sval, val);
     return val_incref(val);
 }
 
@@ -1923,9 +1894,8 @@ BUILTIN(get_key_fn) {
     if (obj->type==VT_MAP)      m=obj->map;
     else if (obj->type==VT_INSTANCE) m=obj->inst->fields;
     else die("get_key() requires a map, instance, or list");
-    char *ks = val_repr(key);
-    Value *v = map_get(m, ks);
-    free(ks);
+    if (key->type!=VT_STR) return val_none();
+    Value *v = map_get(m, key->sval);
     return v ? val_incref(v) : val_none();
 }
 
@@ -1936,9 +1906,8 @@ BUILTIN(del_key_fn) {
     if (obj->type==VT_MAP)      m=obj->map;
     else if (obj->type==VT_INSTANCE) m=obj->inst->fields;
     else die("del_key() requires a map or instance");
-    char *ks = val_repr(key);
-    map_del(m, ks);
-    free(ks);
+    if (key->type!=VT_STR) die("del_key() key must be string");
+    map_del(m, key->sval);
     return val_none();
 }
 
@@ -2181,7 +2150,7 @@ static Value *apply_augop(Value *old, Value *val, const char *op, int line) {
             for (int i=0;i<val->list->len;i++) list_push(nl,val->list->items[i]);
             Value *r = val_list(nl); list_decref(nl); return r;
         }
-        if (old->type!=VT_NUM||val->type!=VT_NUM) die_bad_plus("+=", old, val, line);
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die("+= requires numbers or strings (line %d)",line);
         return val_num(old->nval + val->nval);
     }
     if (!strcmp(op,"-=")) {
@@ -2251,7 +2220,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 Buf buf={0}; buf_append(&buf,a); buf_append(&buf,b);
                 free(a); free(b); res=val_str_own(buf_done(&buf));
             } else {
-                if(l->type!=VT_NUM||r->type!=VT_NUM) die_bad_plus("+", l, r, node->line);
+                if(l->type!=VT_NUM||r->type!=VT_NUM) die("'+' requires numbers (line %d)",node->line);
                 res=val_num(l->nval+r->nval);
             }
         } else if (!strcmp(op,"-")) {
@@ -2538,19 +2507,11 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
 
 /* Evaluate a function call given a Value callee */
 static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line) {
-    /* Keep the callee alive for the full duration of the call. Recursive/self-
-       mutating code can otherwise drop the last external reference to the
-       underlying function/class/instance while we are still executing it. */
-    val_incref(callee);
     if (callee->type==VT_BUILTIN) {
-        Value *r = callee->builtin.fn(argc, args, callee->builtin.ctx);
-        val_decref(callee);
-        return r;
+        return callee->builtin.fn(argc, args, callee->builtin.ctx);
     }
     if (callee->type==VT_CLASS) {
-        Value *r = instantiate_class(callee->cls, args, argc, sig);
-        val_decref(callee);
-        return r;
+        return instantiate_class(callee->cls, args, argc, sig);
     }
     if (callee->type==VT_FUNC) {
         HowFunc *fn = callee->func;
@@ -2558,7 +2519,6 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
             run_loop(fn, sig);
             Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();
             if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
-            val_decref(callee);
             return r;
         }
         if (argc != fn->params.len)
@@ -2574,7 +2534,6 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
         if (closure) env_decref(closure);  /* release our extra hold */
         Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();
         if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
-        val_decref(callee);
         return r;
     }
     /* Map call: map(key) → map[key] */
@@ -2583,9 +2542,7 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
         char *ks = val_repr(args[0]);
         Value *v = map_get(callee->map, ks); free(ks);
         if (!v) die("key not found in map (line %d)",line);
-        Value *r = val_incref(v);
-        val_decref(callee);
-        return r;
+        return val_incref(v);
     }
     /* List call: list(i) → list[i] */
     if (callee->type==VT_LIST) {
@@ -2593,24 +2550,17 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
         if (args[0]->type!=VT_NUM) die("list index must be a number (line %d)",line);
         int i=(int)args[0]->nval;
         if (i<0||i>=callee->list->len) die("list index %d out of range (line %d)",i,line);
-        Value *r = val_incref(callee->list->items[i]);
-        val_decref(callee);
-        return r;
+        return val_incref(callee->list->items[i]);
     }
     if (callee->type==VT_INSTANCE) {
         /* instance(key) → field */
         if (argc!=1) die("instance call requires 1 argument (line %d)",line);
-        char *ks = val_repr(args[0]);
-        Value *v = map_get(callee->inst->fields, ks);
-        if (!v) die("no field '%s' on instance (line %d)",ks,line);
-        free(ks);
-        Value *r = val_incref(v);
-        val_decref(callee);
-        return r;
+        if (args[0]->type!=VT_STR) die("instance call key must be string (line %d)",line);
+        Value *v = map_get(callee->inst->fields, args[0]->sval);
+        if (!v) die("no field '%s' on instance (line %d)",args[0]->sval,line);
+        return val_incref(v);
     }
-    int ty = callee->type;
-    val_decref(callee);
-    die("not callable (type=%d, line=%d)", ty, line);
+    die("not callable (type=%d, line=%d)", callee->type, line);
     return val_none();
 }
 
@@ -3328,108 +3278,50 @@ static int repl_should_autoprint(const char *src) {
     return 1;
 }
 
-static int repl_bracket_delta(const char *s) {
-    int delta = 0;
-    char quote = 0;
-    int escaped = 0;
-    while (*s) {
-        char c = *s++;
-        if (quote) {
-            if (escaped) {
-                escaped = 0;
-                continue;
-            }
-            if (c == '\\') {
-                escaped = 1;
-                continue;
-            }
-            if (c == quote) quote = 0;
-            continue;
-        }
-        if (c == '#') break;
-        if (c == 39 || c == '"') {
-            quote = c;
-            continue;
-        }
-        if (c == '(' || c == '{' || c == '[') delta++;
-        else if (c == ')' || c == '}' || c == ']') delta--;
-    }
-    return delta;
-}
-
 static void repl(Env *env) {
     printf("Howlang  |  Ctrl-D or quit() to exit\n");
     char buf[REPL_LINE_MAX];
-    char srcbuf[REPL_LINE_MAX * 16];
 
     while (1) {
-        srcbuf[0] = 0;
-        int depth = 0;
-        int first_line = 1;
-        int aborted = 0;
+        int r = repl_readline(">> ", buf, sizeof(buf));
+        if (r < 0) { printf("\n"); break; }
 
-        while (1) {
-            int r = repl_readline(first_line ? ">> " : ".. ", buf, sizeof(buf));
-            if (r < 0) {
-                if (first_line) { printf("\n"); return; }
-                fprintf(stderr, "\033[31m[Error] incomplete input; expected closing bracket(s)\033[0m\n");
-                printf("\n");
-                return;
-            }
+        /* Trim */
+        char *line = buf;
+        while (*line == ' ' || *line == '\t') line++;
+        int len = strlen(line);
+        while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t')) line[--len] = 0;
+        if (!len) continue;
 
-            char *line = buf;
-            while (*line == ' ' || *line == '\t') line++;
-            int len = strlen(line);
-            while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t')) line[--len] = 0;
+        if (!strcmp(line, "quit()") || !strcmp(line, "exit")) break;
 
-            if (first_line && !len) continue;
-            if (first_line && (!strcmp(line, "quit()") || !strcmp(line, "exit"))) return;
+        repl_hist_push(line);
 
-            if (strlen(srcbuf) + strlen(line) + 2 >= sizeof(srcbuf)) {
-                fprintf(stderr, "\033[31m[Error] REPL input too long\033[0m\n");
-                aborted = 1;
-                break;
-            }
-
-            strcat(srcbuf, line);
-            strcat(srcbuf, "\n");
-            repl_hist_push(line);
-            depth += repl_bracket_delta(line);
-            if (depth < 0) depth = 0;
-
-            first_line = 0;
-            if (depth == 0) break;
-        }
-
-        if (aborted || !srcbuf[0]) continue;
-
-        char *trimmed = srcbuf;
-        while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\n') trimmed++;
-        if (!*trimmed) continue;
-
-        char runbuf[sizeof(srcbuf) + 64];
-        int nl_count = 0;
-        for (char *p = trimmed; *p; p++) if (*p == '\n') nl_count++;
-        int autoprint = (nl_count <= 1) ? repl_should_autoprint(trimmed) : 0;
+        /* If it looks like a bare expression, auto-print the result */
+        char runbuf[REPL_LINE_MAX + 64];
+        int autoprint = repl_should_autoprint(line);
         if (autoprint) {
+            /* Wrap: evaluate expr, print if not none */
             snprintf(runbuf, sizeof(runbuf),
                 "var _ = ((%s))\n"
                 "_ != none: print(_)\n",
-                trimmed);
+                line);
         } else {
-            strncpy(runbuf, trimmed, sizeof(runbuf)-1);
-            runbuf[sizeof(runbuf)-1] = 0;
+            strncpy(runbuf, line, sizeof(runbuf)-1);
         }
 
+        /* Run with graceful error recovery */
         g_repl_active = 1;
         if (setjmp(g_repl_jmp) == 0) {
             run_source(runbuf, env);
         } else {
+            /* Error was caught — print it nicely and continue */
             fprintf(stderr, "\033[31m[Error] %s\033[0m\n", g_repl_errmsg);
         }
         g_repl_active = 0;
     }
 }
+
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  main                                                                        */

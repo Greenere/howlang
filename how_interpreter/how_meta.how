@@ -53,7 +53,7 @@ var meta_run_file = (path){
 
 var meta_repl = (){
     print("Howlang meta-interpreter  |  quit() or Ctrl-D to exit"),
-    print("Note: {} is an empty map; use list() for an empty list."),
+    print("Tip: use ↑/↓ for history, and type help() for quick tips."),
 
     # Build env with real lex/parse injected so `how` imports work inside the REPL
     var env = meta_make_globals(),
@@ -83,7 +83,16 @@ var meta_repl = (){
             going = false
         },
 
-        line != none and line != "quit()" and line != "exit": {
+        line != none and (line == "help" or line == "help()" or line == ":help"): {
+            print("Commands: quit(), exit(), help()"),
+            print("Imports:   how path/to/module      (example: how samples/test_all)"),
+            print("History:   use ↑ and ↓ to browse previous input"),
+            print("Blocks:    continue with lines ending in '{' or ','"),
+            print("Note:      {} is an empty map; use list() for an empty list")
+        },
+
+        line != none and line != "quit()" and line != "exit" and
+        line != "help" and line != "help()" and line != ":help": {
             buf != "": buf = buf + "\n" + line,
             buf == "": buf = line,
 
