@@ -1026,9 +1026,9 @@ static Node *parse_atom(Parser *p) {
                     scan++;
                 }
                 if(found_dcolon) {
-                    /* branch function */
+                    lookslike_func=1;   /* contains :: → branch function */
                 } else if(found_colon) {
-                    /* A top-level ':' without an immediate key:value pattern is more likely a branch function. */
+                    lookslike_func=1;   /* contains : → branch function (cond: body) */
                 } else {
                     lookslike_list=1;
                 }
@@ -1306,9 +1306,7 @@ static Env         *g_globals = NULL;
 
 static size_t g_gc_allocations = 0;
 static size_t g_gc_collections = 0;
-static size_t g_gc_last_collect_allocs = 0;
 static int g_gc_in_progress = 0;
-static size_t g_gc_threshold = 256;
 
 typedef struct { Value ***slots; int len; int cap; } GcValueRootStack;
 typedef struct { Env   ***slots; int len; int cap; } GcEnvRootStack;
@@ -1341,10 +1339,8 @@ static void gc_pop_env_root(void) {
 #define GC_ROOT_ENV(e) gc_push_env_root(&(e))
 #define GC_UNROOT_ENV() gc_pop_env_root()
 
-static void gc_maybe_collect(void);
 
 static Value *val_new(VT type) {
-    gc_maybe_collect();
     Value *v = xmalloc(sizeof(Value));
     memset(v, 0, sizeof(*v));
     v->type = type;
@@ -1363,7 +1359,6 @@ static Value *val_str(const char *s){ Value *v=val_new(VT_STR); v->sval=xstrdup(
 static Value *val_str_own(char *s){ Value *v=val_new(VT_STR); v->sval=s; return v; }
 
 static HowMap *map_new(void) {
-    gc_maybe_collect();
     HowMap *m = xmalloc(sizeof(*m));
     m->pairs=NULL; m->len=m->cap=0; m->refcount=1;
     m->gc_mark = 0;
@@ -1378,7 +1373,6 @@ static Value *val_map(HowMap *m) {
 }
 
 static HowList *list_new(void) {
-    gc_maybe_collect();
     HowList *l = xmalloc(sizeof(*l));
     l->items=NULL; l->len=l->cap=0; l->refcount=1;
     l->gc_mark = 0;
@@ -1481,7 +1475,6 @@ struct Env {
 };
 
 static Env *env_new(Env *parent) {
-    gc_maybe_collect();
     Env *e = xmalloc(sizeof(*e));
     e->entries=NULL; e->len=e->cap=0;
     e->parent  = parent; if(parent) parent->refcount++;
@@ -1765,7 +1758,6 @@ static char *find_how_file(const char *name) {
 
 /* Control flow signals via longjmp */
 #include <setjmp.h>
-#define UNUSED(x) (void)(x)
 
 typedef struct SignalReturn { Value *val; } SignalReturn;
 typedef struct SignalBreak  { int dummy; } SignalBreak;
@@ -2060,6 +2052,13 @@ BUILTIN(dirof_fn) {
     char *slash = strrchr(buf,'/');
     if (!slash) return val_str("./");
     slash[1]=0;
+    return val_str(buf);
+}
+
+BUILTIN(cwd_fn) {
+    (void)argc; (void)argv; (void)ctx;
+    char buf[4096];
+    if (!getcwd(buf, sizeof(buf))) die("cwd(): cannot get working directory");
     return val_str(buf);
 }
 
@@ -2431,21 +2430,8 @@ static void gc_collect(Env *root_env) {
     gc_sweep_modules();
     gc_sweep_envs();
     g_gc_collections++;
-    g_gc_last_collect_allocs = g_gc_allocations;
     g_gc_in_progress = 0;
 }
-
-static void gc_maybe_collect(void) {
-    if (g_gc_in_progress) return;
-    if (g_gc_allocations - g_gc_last_collect_allocs < g_gc_threshold) return;
-    Env *root = g_globals;
-    if (g_gc_env_roots.len > 0 && g_gc_env_roots.slots[g_gc_env_roots.len-1]) {
-        Env **slot = g_gc_env_roots.slots[g_gc_env_roots.len-1];
-        if (slot && *slot) root = *slot;
-    }
-    gc_collect(root);
-}
-
 
 static void setup_globals(Env *env) {
 #define REG(name,fn) env_set(env,name,make_builtin(name,builtin_##fn))
@@ -2474,6 +2460,7 @@ static void setup_globals(Env *env) {
     REG("write",   write_fn);
     REG("args",    args_fn);
     REG("dirof",   dirof_fn);
+    REG("cwd",     cwd_fn);
     REG("_resolve_how",     resolve_how_fn);
     REG("_push_import_dir", push_import_dir_fn);
     REG("_add_search_dir",  add_search_dir_fn);
@@ -2809,8 +2796,10 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         fn->closure  = env; env->refcount++;
         fn->is_loop  = node->func.is_loop;
         fn->refcount = 1;
+        /* Register fn AFTER val_new to avoid GC sweeping fn before its Value exists */
+        Value *v = val_new(VT_FUNC);
+        v->func = fn;
         fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
-        Value *v = val_new(VT_FUNC); v->func = fn;
         return v;
     }
 
@@ -2821,8 +2810,10 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         cls->branches = node->func.branches;
         cls->closure  = env; env->refcount++;
         cls->refcount = 1;
+        /* Register cls AFTER val_new to avoid GC sweeping cls before its Value exists */
+        Value *v = val_new(VT_CLASS);
+        v->cls = cls;
         cls->gc_next = g_all_classes; g_all_classes = cls; g_gc_allocations++;
-        Value *v = val_new(VT_CLASS); v->cls = cls;
         return v;
     }
 
@@ -3233,12 +3224,13 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
     memset(inst, 0, sizeof(*inst));
     inst->fields   = fields; fields->refcount++;
     inst->refcount = 1;
-    inst->gc_next = g_all_instances; g_all_instances = inst; g_gc_allocations++;
 
     /* InstanceEnv: variables are backed by fields */
+    /* Register inst AFTER inst_env_new to avoid GC sweeping inst before inst_env set */
     Env *inst_env = inst_env_new(inst, init_env);
     GC_ROOT_ENV(inst_env);
     inst->inst_env = inst_env; inst_env->refcount++;
+    inst->gc_next = g_all_instances; g_all_instances = inst; g_gc_allocations++;
 
     /* Re-wrap method closures so they close over inst_env */
     for (int i=0;i<fields->len;i++) {
@@ -3256,8 +3248,10 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
             newfn->is_loop  = saved_is_loop;
             newfn->closure  = inst_env;
             newfn->refcount = 1;
+            /* Register newfn AFTER val_new to avoid GC sweeping it before its Value exists */
+            Value *nv = val_new(VT_FUNC);
+            nv->func = newfn;
             newfn->gc_next = g_all_funcs; g_all_funcs = newfn; g_gc_allocations++;
-            Value *nv = val_new(VT_FUNC); nv->func = newfn;
             fields->pairs[i].val = nv;
             val_decref(v);
         }
@@ -3349,7 +3343,7 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     HowModule *mod = xmalloc(sizeof(*mod));
     memset(mod, 0, sizeof(*mod));
     mod->name = xstrdup(modname);
-    mod->gc_next = g_all_modules; g_all_modules = mod; g_gc_allocations++;
+    /* Register mod AFTER env_new to avoid GC sweeping mod before mod->env is set */
     /* expose non-builtin vars in a clean env */
     Env *pub_env = env_new(NULL);
     GC_ROOT_ENV(pub_env);
@@ -3366,6 +3360,8 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     }
     mod->env = pub_env;
     mod->refcount = 1;
+    /* Now mod->env is set; register with GC so gc_mark_module can trace pub_env */
+    mod->gc_next = g_all_modules; g_all_modules = mod; g_gc_allocations++;
 
     Value *modval = val_new(VT_MODULE); modval->mod = mod;
     /* Bind each exported var directly so helpers are accessible by name */
@@ -3385,7 +3381,6 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     gc_clear_root_stacks();
     GC_ROOT_ENV(env);
     gc_collect(env);
-    GC_UNROOT_ENV();
     GC_UNROOT_ENV();
 }
 

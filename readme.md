@@ -1,16 +1,25 @@
 # Howlang
 
 A small, expressive programming language by Haoyang Li (2022).  
-This repository contains a complete Python-based tree-walking interpreter.
+This repository contains a C interpreter (`howlang.c`) and an optional
+self-hosting meta-interpreter written in Howlang itself (`how_interpreter/`).
 
 ---
 
 ## Quick Start
 
 ```bash
-python howlang.py program.how   # run a file
-python howlang.py               # interactive REPL
-python howlang.py -e 'print("Hello!")'  # one-liner
+# Build
+cc -O2 -o howlang howlang.c -lm
+
+# Run a file
+./howlang program.how
+
+# Interactive REPL
+./howlang
+
+# Meta-interpreter REPL (Howlang interpreting Howlang)
+./howlang how_interpreter/how_meta.how
 ```
 
 ---
@@ -151,6 +160,24 @@ p.name          # "Alice"
 p.greet("there")  # Hi there I am Alice
 ```
 
+### Modules
+
+Use `how` to import a `.how` file as a module. The module is bound under
+a name, and all its exports are also bound directly into the calling scope.
+
+```
+how lru_cache               # binds module as "lru_cache"
+how graph as g              # binds module as "g"
+how samples/lru_cache as c  # path with slashes — no quotes needed
+how "path/to/mod" as m      # quoted path also accepted
+
+where samples               # add directory to search path (no quotes needed)
+how graph                   # now finds samples/graph.how
+```
+
+After `how graph as g`, use `g.graph[]` to access the class inside the module.
+The `where` directive and path imports work with both relative and absolute paths.
+
 ### Operators
 
 | Category   | Operators                               |
@@ -167,26 +194,61 @@ String concatenation uses `+` (auto-coerces either side to string).
 
 ## Built-in Functions
 
-| Name              | Description                                   |
-|-------------------|-----------------------------------------------|
-| `print(x, ...)`   | Print one or more values                      |
-| `len(x)`          | Length of list, map, or string                |
-| `range(n)`        | List `[0..n-1]`; also `range(a,b)`, `range(a,b,step)` |
-| `str(x)`          | Convert to string                             |
-| `num(x)`          | Convert to number                             |
-| `bool(x)`         | Convert to bool                               |
-| `type(x)`         | Type name as string                           |
-| `list()`          | Create an empty mutable list                  |
-| `push(lst, v)`    | Append value to list (mutates in place)       |
-| `pop(lst)`        | Remove and return last element                |
-| `keys(m)`         | List of keys in a map or class instance       |
-| `values(m)`       | List of values in a map or class instance     |
-| `abs(n)`          | Absolute value                                |
-| `floor(n)`        | Floor                                         |
-| `ceil(n)`         | Ceiling                                       |
-| `sqrt(n)`         | Square root                                   |
-| `max(...)` / `min(...)` | Max/min of args or a single list        |
-| `input(prompt)`   | Read a line from stdin                        |
+| Name                    | Description                                              |
+|-------------------------|----------------------------------------------------------|
+| `print(x, ...)`         | Print one or more values                                 |
+| `len(x)`                | Length of list, map, or string                           |
+| `range(n)`              | List `[0..n-1]`; also `range(a,b)`, `range(a,b,step)`   |
+| `str(x)`                | Convert to string                                        |
+| `num(x)`                | Convert to number                                        |
+| `bool(x)`               | Convert to bool                                          |
+| `type(x)`               | Type name as string                                      |
+| `list()`                | Create an empty mutable list                             |
+| `map()`                 | Create an empty mutable map                              |
+| `push(lst, v)`          | Append value to list (mutates in place)                  |
+| `pop(lst)`              | Remove and return last element                           |
+| `keys(m)`               | List of keys in a map or instance                        |
+| `values(m)`             | List of values in a map or instance                      |
+| `has_key(m, k)`         | True if key exists in map or list index is valid         |
+| `get_key(m, k)`         | Get by key/index, returns `none` if out of range         |
+| `set_key(m, k, v)`      | Set by key/index (mutates in place)                      |
+| `del_key(m, k)`         | Delete a key from a map                                  |
+| `abs(n)`                | Absolute value                                           |
+| `floor(n)`              | Floor                                                    |
+| `ceil(n)`               | Ceiling                                                  |
+| `sqrt(n)`               | Square root                                              |
+| `max(...)` / `min(...)` | Max/min of args or a single list                         |
+| `ask(prompt)`           | Print prompt and read a line from stdin                  |
+| `read(path)`            | Read entire file as a string                             |
+| `write(path, v)`        | Write value to file (strings written raw, others repr'd) |
+| `args()`                | List of command-line arguments                           |
+| `gc()`                  | Trigger a garbage collection cycle                       |
+| `cwd()`                 | Return the current working directory as a string         |
+
+---
+
+## REPL
+
+Running `./howlang` with no arguments starts the interactive REPL:
+
+```
+Howlang  |  Ctrl-D or quit() to exit
+>> var x = 6 * 7
+>> x
+42
+>> x + 1
+43
+>> _
+43
+```
+
+**Features:**
+- **Auto-print** — bare expressions print their value automatically; statements (`var`, `how`, assignments) do not
+- **`_`** — holds the last expression result (like Python's `_`)
+- **↑ / ↓** — browse command history (up to 500 entries)
+- **← / →**, **Ctrl-A / E** — cursor movement within the line
+- **Ctrl-K** — delete to end of line; **Ctrl-U** — clear the line
+- **Graceful errors** — parse and runtime errors print a message and the REPL continues; state is preserved
 
 ---
 
@@ -212,13 +274,18 @@ String concatenation uses `+` (auto-coerces either side to string).
 
 ```
 howlang/
-  lexer.py        # Tokenizer  (adds: ; skipping, break keyword)
-  ast_nodes.py    # AST nodes  (adds: ForLoop, BreakLoop)
-  parser.py       # Parser     (adds: for-range, (:)=, bare-ident class keys)
-  interpreter.py  # Evaluator  (adds: list concat, ForLoop, break, None==None)
-  howlang.py      # Entry point with error context display
-  examples.how    # Demo program
-  tests.py        # 56-test suite
+  howlang.c             # Single-file C interpreter — build with: cc -O2 -o howlang howlang.c -lm
+  how_interpreter/
+    how_meta.how        # Meta-interpreter entry point
+    how_lexer.how       # Lexer written in Howlang
+    how_parser.how      # Parser written in Howlang
+    how_eval.how        # Evaluator written in Howlang
+  samples/
+    test_all.how        # 54-test suite (direct interpreter)
+    lru_cache.how       # LRU cache module
+    lru_cache_test.how  # 34-test suite for LRU cache
+    graph.how           # Graph + Dijkstra module
+    graph_test.how      # 32-test suite for graph
 ```
 
 ---
@@ -226,6 +293,16 @@ howlang/
 ## Running the Tests
 
 ```bash
-python tests.py
-# 56/56 tests passed
+./howlang samples/test_all.how
+# FINAL: 54/54 passed
+
+./howlang how_interpreter/how_meta.how samples/test_all.how
+# FINAL: 54/54 passed  (same suite via the meta-interpreter)
+
+cd samples
+../howlang lru_cache_test.how
+# 34 passed   0 failed
+
+../howlang graph_test.how
+# 32 passed   0 failed
 ```
