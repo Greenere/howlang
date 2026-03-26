@@ -120,6 +120,7 @@ typedef struct {
     double nval;  /* numeric value */
     int    bval;  /* bool value */
     int    line;
+    int    raw;   /* 1 = single-quoted string (no interpolation) */
 } Token;
 
 typedef struct { Token *toks; int len; int cap; } TokenList;
@@ -175,6 +176,7 @@ static TokenList *lex(const char *src) {
         /* string */
         if (c == '"' || c == '\'') {
             char q = src[pos++]; Buf b = {0};
+            int is_raw = (q == '\'');
             while (pos < n && src[pos] != q) {
                 if (src[pos] == '\\') {
                     pos++;
@@ -194,7 +196,7 @@ static TokenList *lex(const char *src) {
                 }
             }
             if (pos < n) pos++; /* closing quote */
-            t.type = TT_STRING; t.sval = buf_done(&b);
+            t.type = TT_STRING; t.sval = buf_done(&b); t.raw = is_raw;
             tl_push(tl, t); continue;
         }
 
@@ -588,6 +590,31 @@ static Node *parse_branch(Parser *p) {
     /* cond :: body  or  cond : body  or  bare expr */
     Node *cond = parse_expr(p);
 
+    /* For-range and loop auto-calls are always statements, never conditions.
+       (i=0:n){ body }  and  (:)={ body }  followed by  :: x  would otherwise
+       be misread as "if loop-result-truthy :: return x". Wrap immediately.
+       Detection:
+         - N_FORLOOP: always a statement
+         - N_CALL where callee is N_FUNC with is_loop=1 (the (:)={} pattern) */
+    {
+        int is_loop_stmt = 0;
+        if (cond->type == N_FORLOOP) {
+            is_loop_stmt = 1;
+        } else if (cond->type == N_CALL &&
+                   cond->call.callee &&
+                   cond->call.callee->type == N_FUNC &&
+                   cond->call.callee->func.is_loop) {
+            is_loop_stmt = 1;
+        }
+        if (is_loop_stmt) {
+            Node *n = make_node(N_BRANCH, line);
+            n->branch.cond   = NULL;
+            n->branch.body   = cond;
+            n->branch.is_ret = 0;
+            return n;
+        }
+    }
+
     if (p_check(p, TT_DCOLON)) {
         p_adv(p);
         Node *body = parse_expr(p);
@@ -907,6 +934,98 @@ static void parse_func_body(Parser *p, NodeList *out) {
     p_expect(p,TT_RBRACE,"expected '}'");
 }
 
+
+/* ── String interpolation helper ─────────────────────────────────────────────
+ * Chains two nodes with a "+" binop, returning the new root.
+ */
+static Node *interp_chain(Node *left, Node *right, int line) {
+    Node *b = make_node(N_BINOP, line);
+    b->binop.op    = xstrdup("+");
+    b->binop.left  = left;
+    b->binop.right = right;
+    return b;
+}
+
+/* parse_interp_string: expand "hello {expr}" into AST at parse time.
+ * "hello {name}, age {age+1}" → "hello " + str(name) + ", age " + str(age+1)
+ * Use {{ and }} to get literal braces. Single-quoted strings skip interpolation.
+ */
+static Node *parse_interp_string(const char *raw, int line) {
+    /* quick check: any unescaped { ? */
+    int has_interp = 0;
+    for (const char *q = raw; *q; q++)
+        if (*q == '{' && *(q+1) != '{') { has_interp = 1; break; }
+    if (!has_interp) {
+        Node *n = make_node(N_STR, line);
+        n->sval = xstrdup(raw);
+        return n;
+    }
+
+    Node *result = NULL;
+    const char *p = raw;
+    Buf seg = {0};
+
+    while (*p) {
+        if (*p == '{' && *(p+1) == '{') {
+            buf_push(&seg, '{'); p += 2;
+        } else if (*p == '}' && *(p+1) == '}') {
+            buf_push(&seg, '}'); p += 2;
+        } else if (*p == '{') {
+            /* flush literal segment before { */
+            char *lit = buf_done(&seg);
+            if (lit && lit[0]) {
+                Node *s = make_node(N_STR, line);
+                s->sval = lit;
+                result = result ? interp_chain(result, s, line) : s;
+            } else { free(lit); }
+            seg = (Buf){0};
+            p++; /* skip { */
+
+            /* collect expression until matching } */
+            Buf expr_src = {0};
+            int depth = 0;
+            while (*p) {
+                if (*p == '{') depth++;
+                else if (*p == '}') { if (depth == 0) break; depth--; }
+                buf_push(&expr_src, *p++);
+            }
+            if (*p == '}') p++; /* skip closing } */
+
+            char *esrc = buf_done(&expr_src);
+            if (esrc && esrc[0]) {
+                TokenList *etl = lex(esrc);
+                Parser ep = {etl, 0};
+                Node *expr = parse_expr(&ep);
+
+                /* wrap in str(...) */
+                Node *str_call  = make_node(N_CALL, line);
+                Node *str_ident = make_node(N_IDENT, line);
+                str_ident->sval = xstrdup("str");
+                str_call->call.callee  = str_ident;
+                str_call->call.bracket = 0;
+                nl_push(&str_call->call.args, expr);
+
+                result = result ? interp_chain(result, str_call, line) : str_call;
+            }
+            free(esrc);
+        } else {
+            buf_push(&seg, *p++);
+        }
+    }
+    /* flush trailing literal */
+    char *lit = buf_done(&seg);
+    if (lit && lit[0]) {
+        Node *s = make_node(N_STR, line);
+        s->sval = lit;
+        result = result ? interp_chain(result, s, line) : s;
+    } else { free(lit); }
+
+    if (!result) {
+        Node *n = make_node(N_STR, line); n->sval = xstrdup(""); return n;
+    }
+    return result;
+}
+
 static Node *parse_atom(Parser *p) {
     int line = p_peek(p,0)->line;
     TT t = p_peek(p,0)->type;
@@ -917,11 +1036,16 @@ static Node *parse_atom(Parser *p) {
         n->nval = p_adv(p)->nval;
         return n;
     }
-    /* string */
+    /* string — double-quoted supports interpolation: "hello {expr}"
+       single-quoted is always literal: 'no {interpolation}' */
     if (t == TT_STRING) {
-        Node *n = make_node(N_STR,line);
-        n->sval = xstrdup(p_adv(p)->sval);
-        return n;
+        Token *strtok = p_adv(p);
+        if (strtok->raw) {
+            Node *n = make_node(N_STR, line);
+            n->sval = xstrdup(strtok->sval);
+            return n;
+        }
+        return parse_interp_string(strtok->sval, line);
     }
     /* bool */
     if (t == TT_BOOL) {
@@ -3273,6 +3397,22 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
 
     Value *result = val_new(VT_INSTANCE);
     result->inst = inst;
+
+    /* Auto-call _init() if defined — so classes don't need explicit q._init() */
+    {
+        Value *init_fn = env_get(inst->inst_env, "_init");
+        if (init_fn && init_fn->type == VT_FUNC) {
+            Signal init_sig = {SIG_NONE, NULL};
+            Value *no_args[] = {NULL};
+            GC_ROOT_VALUE(result);
+            Value *init_ret = eval_call_val(init_fn, no_args, 0, &init_sig, 0);
+            GC_UNROOT_VALUE();
+            if (init_ret) val_decref(init_ret);
+            if (init_sig.type == SIG_RETURN && init_sig.retval)
+                val_decref(init_sig.retval);
+        }
+    }
+
     GC_UNROOT_ENV();
     return result;
 }

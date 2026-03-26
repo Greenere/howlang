@@ -1,7 +1,7 @@
 var max = (nums){
     len(nums) == 1 :: nums(0),
     var cur = nums(0),
-    :: (i=1:len(nums)){
+    :: (i = 1:len(nums)){
         cur < nums(i): cur = nums(i),
         :: cur
     }

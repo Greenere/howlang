@@ -164,7 +164,7 @@ function scanTokens(text, document, diagnostics) {
         value += text[i];
         advance(text[i]);
       }
-      const keywords = new Set(['var', 'how', 'break', 'and', 'or', 'not', 'true', 'false', 'none']);
+      const keywords = new Set(['var', 'how', 'where', 'as', 'break', 'and', 'or', 'not', 'true', 'false', 'none']);
       pushToken(keywords.has(value) ? 'keyword' : 'ident', value, startLine, startCol, line, col);
       continue;
     }
@@ -270,8 +270,12 @@ function runStructuralChecks(scan, document, diagnostics) {
         addDiagnostic(document, diagnostics, token.line, token.col, token.col + 3, "'how' must be followed by a module identifier.", vscode.DiagnosticSeverity.Error, 'HL103');
         continue;
       }
-      if (afterNext && afterNext.line === token.line) {
-        addDiagnostic(document, diagnostics, afterNext.line, afterNext.col, afterNext.endCol, "Import syntax is 'how moduleName' with no trailing tokens on the same line.", vscode.DiagnosticSeverity.Warning, 'HL104');
+      // Allow: how name as alias
+      const isAs = afterNext?.type === 'keyword' && afterNext.value === 'as';
+      const afterAs = isAs ? nextMeaningful(tokens, tokens.indexOf(afterNext) + 1) : null;
+      const trailingToken = isAs ? (afterAs ? nextMeaningful(tokens, tokens.indexOf(afterAs) + 1) : null) : afterNext;
+      if (trailingToken && trailingToken.line === token.line) {
+        addDiagnostic(document, diagnostics, trailingToken.line, trailingToken.col, trailingToken.endCol, "Import syntax is 'how moduleName' or 'how moduleName as alias'.", vscode.DiagnosticSeverity.Warning, 'HL104');
       }
     }
 
@@ -324,21 +328,16 @@ function isInsideLoop(tokens, index) {
       return true;
     }
     if (t?.type === 'open' && t.value === '(') {
-      // also allow (start:stop) = i { ... }
+      // (var=start:stop){ ... } — for-range loop
+      const maybeIdent = nextMeaningful(tokens, i + 1);
+      if (!maybeIdent || maybeIdent.type !== 'ident') continue;
+      const identIdx = tokens.indexOf(maybeIdent);
+      const maybeEq = nextMeaningful(tokens, identIdx + 1);
+      if (!maybeEq || maybeEq.type !== 'op' || maybeEq.value !== '=') continue;
       let seenColon = false;
-      let seenClose = false;
-      for (let j = i + 1; j < Math.min(tokens.length, i + 12); j += 1) {
-        if (tokens[j].type === 'op' && tokens[j].value === ':') seenColon = true;
-        if (tokens[j].type === 'close' && tokens[j].value === ')') seenClose = true;
-        if (seenClose) {
-          const maybeEq = nextMeaningful(tokens, j + 1);
-          const maybeVar = maybeEq ? nextMeaningful(tokens, tokens.indexOf(maybeEq) + 1) : null;
-          const maybeBrace = maybeVar ? nextMeaningful(tokens, tokens.indexOf(maybeVar) + 1) : null;
-          if (seenColon && maybeEq?.type === 'op' && maybeEq.value === '=' && maybeVar?.type === 'ident' && maybeBrace?.type === 'open' && maybeBrace.value === '{') {
-            return true;
-          }
-          break;
-        }
+      for (let j = tokens.indexOf(maybeEq) + 1; j < Math.min(tokens.length, i + 20); j += 1) {
+        if (tokens[j].type === 'op' && tokens[j].value === ':') { seenColon = true; }
+        if (tokens[j].type === 'close' && tokens[j].value === ')') { if (seenColon) return true; break; }
       }
     }
   }

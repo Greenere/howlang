@@ -44,7 +44,7 @@
       "patterns": [
         {
           "name": "keyword.control.howlang",
-          "match": "\\b(?:var|how|break)\\b"
+          "match": "\\b(?:var|how|where|as|break)\\b"
         },
         {
           "name": "keyword.operator.logical.howlang",
