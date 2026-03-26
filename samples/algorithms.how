@@ -1,0 +1,318 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# algorithms.how  —  Canonical algorithms in Howlang
+#
+# Each algorithm is chosen to highlight a different aspect of the language:
+#
+#   1.  Binary search      — branch-as-return, unbounded loop
+#   2.  Quicksort          — recursion + for-range as expression
+#   3.  Caesar cipher      — strings, for-range, string interpolation
+#   4.  Memoize decorator  — closures as first-class values
+#   5.  Run-length encode  — for-range building state, nested loops
+#   6.  Compose / pipe     — higher-order functions
+#   7.  Sieve              — nested for-range, map as set
+#   8.  Linked list        — class with methods, recursive structure
+#   9.  Newton's method    — numerical iteration, convergence condition
+#  10.  Matrix multiply    — triple nested for-range reads like the math
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. Binary search ─────────────────────────────────────────────────────────
+# The branch-map makes the base cases read like math: if lo>hi → none,
+# if match → index, otherwise narrow the window and continue.
+
+var binary_search = (nums, target){
+    var lo = 0,
+    var hi = len(nums) - 1,
+    :: (:){
+        lo > hi            :: none,
+        var mid = floor((lo + hi) / 2),
+        nums(mid) == target :: mid,
+        nums(mid) < target: lo = mid + 1,
+        nums(mid) > target: hi = mid - 1
+    }()
+}
+
+print("── Binary search ──────────────────────────────")
+print(binary_search({1,3,5,7,9,11,13}, 7))    # 3
+print(binary_search({1,3,5,7,9,11,13}, 6))    # none
+print(binary_search({1,3,5,7,9,11,13}, 13))   # 6
+
+
+# ── 2. Quicksort ─────────────────────────────────────────────────────────────
+# Partition with three independent : branches (all fire) populates three
+# buckets in one pass. The recursive return reads like the definition:
+# sorted(small) + equal + sorted(large).
+
+var quicksort = (lst){
+    len(lst) <= 1 :: lst,
+    var pivot = lst(len(lst) / 2),
+    var small = list(),
+    var equal = list(),
+    var large = list(),
+    (i=0:len(lst)){
+        lst(i) < pivot:  push(small, lst(i)),
+        lst(i) == pivot: push(equal, lst(i)),
+        lst(i) > pivot:  push(large, lst(i))
+    }(),
+    :: quicksort(small) + equal + quicksort(large)
+}
+
+print("── Quicksort ──────────────────────────────────")
+print(quicksort({3,1,4,1,5,9,2,6,5,3}))   # [1,1,2,3,3,4,5,5,6,9]
+print(quicksort({1}))                       # [1]
+print(quicksort({}))                        # []
+
+
+# ── 3. Caesar cipher ─────────────────────────────────────────────────────────
+# String interpolation in the output; independent : branches handle
+# lowercase, uppercase, and passthrough without if/else nesting.
+
+var LOWER = "abcdefghijklmnopqrstuvwxyz"
+var UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+var str_index = (s, ch){
+    :: (i=0:len(s)){ s(i:i+1) == ch :: i }()
+}
+
+var caesar = (text, shift){
+    var result = "",
+    (i=0:len(text)){
+        var ch = text(i:i+1),
+        var lo = str_index(LOWER, ch),
+        var hi = str_index(UPPER, ch),
+        lo != none: result += LOWER((lo+shift)%26 : (lo+shift)%26+1),
+        hi != none: result += UPPER((hi+shift)%26 : (hi+shift)%26+1),
+        lo == none and hi == none: result += ch
+    }(),
+    :: result
+}
+
+print("── Caesar cipher ──────────────────────────────")
+var msg = "Hello, World!"
+var enc = caesar(msg, 13)
+print(enc)            # Uryyb, Jbeyq!
+print(caesar(enc,13)) # Hello, World!
+
+
+# ── 4. Memoize decorator ─────────────────────────────────────────────────────
+# A closure that wraps any function with a result cache. The cache is
+# private state captured by the inner closure — no class needed.
+
+var memoize = (f){
+    var cache = map(),
+    :: (x){
+        var k = str(x),
+        has_key(cache, k): { :: get_key(cache, k) },
+        var result = f(x),
+        set_key(cache, k, result),
+        :: result
+    }
+}
+
+var fib = none
+fib = memoize((n){
+    n < 2 :: n,
+    :: fib(n-1) + fib(n-2)
+})
+
+print("── Memoized Fibonacci ─────────────────────────")
+print(fib(10))   # 55
+print(fib(30))   # 832040
+print(fib(35))   # 9227465
+
+
+# ── 5. Run-length encoding ────────────────────────────────────────────────────
+# Two independent : branches per iteration (match / no-match) build runs.
+# Decoding is a nested for-range: for each run, repeat the character.
+
+var rle_encode = (s){
+    len(s) == 0 :: list(),
+    var runs  = list(),
+    var cur   = s(0:1),
+    var count = 1,
+    (i=1:len(s)){
+        var ch = s(i:i+1),
+        ch == cur: count += 1,
+        ch != cur: {
+            push(runs, {cur, count}),
+            cur   = ch,
+            count = 1
+        }
+    }(),
+    push(runs, {cur, count}),
+    :: runs
+}
+
+var rle_decode = (runs){
+    var result = "",
+    (i=0:len(runs)){
+        var run = runs(i),
+        (j=0:run(1)){ result += run(0) }()
+    }(),
+    :: result
+}
+
+print("── Run-length encoding ────────────────────────")
+var enc2 = rle_encode("aaabbbccddddde")
+(i=0:len(enc2)){
+    var r = enc2(i),
+    print("{r(0)} × {r(1)}")
+}()
+print(rle_decode(enc2))   # aaabbbccddddde
+
+
+# ── 6. Compose and pipe ───────────────────────────────────────────────────────
+# Since everything is a function, higher-order combinators are natural.
+# compose(f, g)(x) = f(g(x)); pipe runs left to right.
+
+var compose = (f, g){ :: (x){ :: f(g(x)) } }
+var pipe    = (fns){
+    :: (x){
+        var result = x,
+        (i=0:len(fns)){ result = fns(i)(result) }(),
+        :: result
+    }
+}
+
+var double = (x){ :: x * 2 }
+var inc    = (x){ :: x + 1 }
+var square = (x){ :: x * x }
+var negate = (x){ :: -x    }
+
+print("── Compose and pipe ───────────────────────────")
+print(compose(inc, double)(5))           # (5*2)+1 = 11
+print(pipe({double, inc, square, negate})(3))  # -((3*2+1)²) = -49
+
+
+# ── 7. Sieve of Eratosthenes ──────────────────────────────────────────────────
+# The outer loop skips composites with a : branch and marks multiples
+# with an inner for-range. The collection pass reads like the definition.
+
+var sieve = (n){
+    var composite = map(),
+    (i=2:n){
+        has_key(composite, str(i)): none,   # composite — skip to next i
+        (j=i*2:n){
+            j % i == 0: set_key(composite, str(j), true)
+        }()
+    }(),
+    var primes = list(),
+    (i=2:n){
+        not has_key(composite, str(i)): push(primes, i)
+    }(),
+    :: primes
+}
+
+print("── Sieve of Eratosthenes ──────────────────────")
+print(sieve(50))
+print("{len(sieve(100))} primes below 100")   # 25
+
+
+# ── 8. Linked list ────────────────────────────────────────────────────────────
+# A class with structural recursion. map() builds the new list in reverse
+# then reverses, giving correct order without a reverse primitive.
+
+var ll_node = [val, next]{ val: val, next: next }
+
+var linked = []{
+    head: none,
+    size: 0,
+
+    push_front: (v){
+        head  = ll_node[v, head],
+        size += 1
+    },
+
+    to_list: (){
+        var result = list(),
+        var cur = head,
+        (:)={
+            cur == none: break,
+            push(result, cur.val),
+            cur = cur.next
+        },
+        :: result
+    },
+
+    map: (f){
+        var items    = to_list(),
+        var new_list = linked[],
+        (i=0:len(items)){
+            new_list.push_front(f(items(len(items)-1-i)))
+        }(),
+        :: new_list
+    }
+}
+
+print("── Linked list ────────────────────────────────")
+var lst = linked[]
+lst.push_front(3)
+lst.push_front(2)
+lst.push_front(1)
+print(lst.to_list())                             # [1, 2, 3]
+print(lst.map((x){ :: x * x }).to_list())        # [1, 4, 9]
+
+
+# ── 9. Newton's method ────────────────────────────────────────────────────────
+# The convergence condition and flat-derivative guard read as branch cases.
+# Takes f and its derivative df, returns the root near x0.
+
+var newton = (f, df, x0){
+    var x = x0,
+    :: (:){
+        var fx  = f(x),
+        var dfx = df(x),
+        abs(fx) < 0.000001 :: x,     # converged — return root
+        dfx == 0           :: none,   # flat — cannot continue
+        x = x - fx / dfx
+    }()
+}
+
+print("── Newton's method ────────────────────────────")
+var root2 = newton((x){ :: x*x - 2 }, (x){ :: 2*x }, 1.0)
+print("{root2}")            # ~1.41421
+print("{root2 * root2}")    # ~2.0
+
+var cbrt27 = newton((x){ :: x*x*x - 27 }, (x){ :: 3*x*x }, 2.0)
+print("{cbrt27}")           # ~3.0
+
+
+# ── 10. Matrix multiplication ─────────────────────────────────────────────────
+# Triple nested for-range reads exactly like the mathematical definition:
+#   C[i][j] = Σ_k  A[i][k] × B[k][j]
+
+var mat_new = (rows, cols, val){
+    var m = list(),
+    (i=0:rows){
+        var row = list(),
+        (j=0:cols){ push(row, val) }(),
+        push(m, row)
+    }(),
+    :: m
+}
+
+var mat_mul = (A, B){
+    var rows_A = len(A),
+    var cols_A = len(A(0)),
+    var cols_B = len(B(0)),
+    var C = mat_new(rows_A, cols_B, 0),
+    (i=0:rows_A){
+        (j=0:cols_B){
+            var sum = 0,
+            (k=0:cols_A){ sum += A(i)(k) * B(k)(j) }(),
+            set_key(C(i), j, sum)
+        }()
+    }(),
+    :: C
+}
+
+var mat_print = (m){
+    (i=0:len(m)){ print(m(i)) }()
+}
+
+print("── Matrix multiplication ───────────────────────")
+var A = {{1,2,3},{4,5,6}}
+var B = {{7,8},{9,10},{11,12}}
+mat_print(mat_mul(A, B))
+# [58,  64]
+# [139, 154]
