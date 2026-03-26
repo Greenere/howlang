@@ -598,7 +598,9 @@ static Node *parse_branch(Parser *p) {
          - N_CALL where callee is N_FUNC with is_loop=1 (the (:)={} pattern) */
     {
         int is_loop_stmt = 0;
-        if (cond->type == N_FORLOOP) {
+        if (cond->type == N_CALL && cond->call.callee &&
+                   cond->call.callee->type == N_FORLOOP) {
+            /* (i=0:n){ }() — explicit for-range call is a loop statement */
             is_loop_stmt = 1;
         } else if (cond->type == N_CALL &&
                    cond->call.callee &&
@@ -830,7 +832,7 @@ static Node *parse_call(Parser *p) {
     int last_line = line;
     /* if it's a func/class literal, set last_line to the line of the
        closing brace (p->pos-1), NOT the next token (p->pos) */
-    if (n->type == N_FUNC || n->type == N_CLASS) {
+    if (n->type == N_FUNC || n->type == N_CLASS || n->type == N_FORLOOP) {
         int prev = p->pos - 1;
         if (prev >= 0 && prev < p->tl->len)
             last_line = p->tl->toks[prev].line;
@@ -840,8 +842,11 @@ static Node *parse_call(Parser *p) {
 
     for (;;) {
         int cur_line = p_peek(p,0)->line;
+        /* For-range: (i=0:n){ }() — () always triggers a call regardless of line.
+           No ambiguity: a for-range value can only be invoked with (). */
+        int force_call = (n->type == N_FORLOOP && p_check(p,TT_LPAREN));
         /* ( args ) — function call or slice, same line */
-        if (p_check(p,TT_LPAREN) && cur_line == last_line) {
+        if (p_check(p,TT_LPAREN) && (force_call || cur_line == last_line)) {
             p_adv(p);
             /* check for slice: (: or (expr: */
             int is_slice = 0;
@@ -1356,6 +1361,11 @@ struct HowFunc {
     NodeList branches;
     Env     *closure;
     int      is_loop;
+    /* for-range callable fields */
+    int      is_forrange;
+    char    *iter_var;
+    Node    *fr_start;
+    Node    *fr_stop;
     int      refcount;
     int      gc_mark;
     struct HowFunc *gc_next;
@@ -2464,6 +2474,7 @@ static void gc_sweep_funcs(void) {
         *pp = f->gc_next;
         for (int i = 0; i < f->params.len; i++) free(f->params.s[i]);
         free(f->params.s);
+        if (f->iter_var) free(f->iter_var);
         free(f);
     }
 }
@@ -2979,8 +2990,23 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         Value *v=val_map(m); map_decref(m); return v;
     }
 
-    case N_FORLOOP:
-        return run_for_loop(node, env, sig);
+    case N_FORLOOP: {
+        HowFunc *fn = xmalloc(sizeof(HowFunc)); memset(fn,0,sizeof(HowFunc));
+        fn->is_loop     = 0;
+        fn->is_forrange = 1;
+        fn->iter_var    = xstrdup(node->forloop.iter_var);
+        fn->fr_start    = node->forloop.start;
+        fn->fr_stop     = node->forloop.stop;
+        for (int _i=0; _i<node->forloop.branches.len; _i++)
+            nl_push(&fn->branches, node->forloop.branches.nodes[_i]);
+        fn->closure  = env;
+        if (env) env->refcount++;
+        fn->refcount = 1;
+        Value *fv = val_new(VT_FUNC);
+        fv->func = fn;
+        fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
+        return fv;
+    }
 
     case N_VARDECL: {
         Value *v = eval(node->vardecl.value, env, sig);
@@ -3039,6 +3065,32 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
     }
     if (callee->type==VT_FUNC) {
         HowFunc *fn = callee->func;
+        if (fn->is_forrange) {
+            int start_v = 0;
+            if (fn->fr_start) {
+                Value *sv = eval(fn->fr_start, fn->closure, sig);
+                if (sig->type!=SIG_NONE) return sv;
+                start_v = (int)sv->nval; val_decref(sv);
+            }
+            Value *stop_val = eval(fn->fr_stop, fn->closure, sig);
+            if (sig->type!=SIG_NONE) return stop_val;
+            int stop_v = (int)stop_val->nval; val_decref(stop_val);
+            Env *local = env_new(fn->closure);
+            GC_ROOT_ENV(local);
+            for (int _i=start_v; _i<stop_v && sig->type==SIG_NONE; _i++) {
+                Value *iv = val_num((double)_i);
+                if (!env_assign(local, fn->iter_var, iv))
+                    env_set(local, fn->iter_var, iv);
+                val_decref(iv);
+                run_branches(&fn->branches, local, sig);
+                if (sig->type==SIG_BREAK) { sig->type=SIG_NONE; break; }
+            }
+            GC_UNROOT_ENV();
+            env_decref(local);
+            Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();
+            if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
+            return r;
+        }
         if (fn->is_loop) {
             run_loop(fn, sig);
             Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();

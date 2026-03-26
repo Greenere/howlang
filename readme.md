@@ -118,28 +118,29 @@ var i = 0
 # i is now 5
 ```
 
-#### For-range loop: `(var=start:stop){ }`
+#### For-range loop: `(var=start:stop){ }()`
 
 Iterates `var` over `[start, stop)`. The variable is declared inline in the
 parameter position — consistent with how parameters are always written in `( )`.
-Side-effect branches (`:`) run each iteration. A `:: expr` branch is the
-**post-loop return value** — it runs once after all iterations complete:
+
+The for-range is a **callable value**: explicit `()` is required to run it,
+exactly like the unbounded `(:){ }()` loop. `::` exits immediately with a
+return value, same as in any other loop or function:
 
 ```
+# Loop as a statement — run it, then use the result
 var total = 0
-(i=0:5){
-    total += i      # runs for i = 0,1,2,3,4
-}
+(i=0:5){ total += i }()
 # total == 10
 
-# With a return value:
-var max_fn = (nums){
-    var cur = nums(0),
-    :: (i=1:len(nums)){
-        cur < nums(i): cur = nums(i),
-        :: cur           # returned once after all iterations
-    }
-}
+# Early exit: :: exits on the first match
+var first_big = (i=0:10){ i * i > 20 :: i }()
+# first_big == 5  (5*5=25 > 20)
+
+# Store the loop, call it later
+var my_loop = (i=0:3){ print(str(i)) }
+my_loop()   # prints 0, 1, 2
+my_loop()   # prints 0, 1, 2 again
 ```
 
 ### Classes
@@ -268,7 +269,7 @@ Howlang  |  Ctrl-D or quit() to exit
 |--------|---------|
 | `(:){ ... }()` | Unbounded loop, `::` breaks and returns |
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
-| `(i=a:b){ ... }` | For-range loop; `::` in body is post-loop return value |
+| `(i=a:b){ ... }()` | For-range loop; `::` exits immediately with a value |
 
 ### Branch firing rules inside loops
 
@@ -319,7 +320,7 @@ howlang/
     lru_cache_test.how  # 34-test suite for LRU cache
     graph.how           # Graph + Dijkstra module
     graph_test.how      # 32-test suite for graph
-    test_loops.how      # 41-test suite for loop semantics
+    test_loops.how      # 41-test suite for loop semantics (loop-as-statement, :: exit)
 ```
 
 ---

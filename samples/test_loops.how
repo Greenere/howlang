@@ -43,7 +43,7 @@ print("─── for-range as statement ─────────────�
 # Basic: for-range runs as a side effect, then :: value fires
 var sum_to = (n){
     var acc = 0
-    (i=0:n){ acc += i }
+    (i=0:n){ acc += i }()
     :: acc
 }
 assert_eq("sum 0..4",  sum_to(5), 10)
@@ -55,7 +55,7 @@ var count_evens = (lst){
     var count = 0
     (i=0:len(lst)){
         lst(i) % 2 == 0: count += 1
-    }
+    }()
     :: count
 }
 assert_eq("count evens mixed",    count_evens({1,2,3,4,5,6}), 3)
@@ -65,8 +65,8 @@ assert_eq("count evens all-even", count_evens({2,4,6}),       3)
 # Two for-range loops then a return
 var double_sum = (){
     var total = 0
-    (i=0:3){ total += i }      # 0+1+2 = 3
-    (j=0:4){ total += j }      # 3+0+1+2+3 = 9
+    (i=0:3){ total += i }()      # 0+1+2 = 3
+    (j=0:4){ total += j }()      # 3+0+1+2+3 = 9
     :: total
 }
 assert_eq("two for-ranges then return", double_sum(), 9)
@@ -74,7 +74,7 @@ assert_eq("two for-ranges then return", double_sum(), 9)
 # For-range building a list, then return that list
 var squares = (n){
     var out = list()
-    (i=0:n){ push(out, i * i) }
+    (i=0:n){ push(out, i * i) }()
     :: out
 }
 assert_eq("squares 0..4",  squares(5), {0,1,4,9,16})
@@ -84,7 +84,7 @@ assert_eq("squares empty", squares(0), list())
 var make_summer = (n){
     :: (){
         var s = 0
-        (i=0:n){ s += i }
+        (i=0:n){ s += i }()
         :: s
     }
 }
@@ -93,11 +93,14 @@ var sum10 = make_summer(10)
 assert_eq("closure sum 0..4", sum5(),  10)
 assert_eq("closure sum 0..9", sum10(), 45)
 
-# For-range post-loop :: (runs once after all iterations, not per-iteration)
-var last_index = (lst){
-    :: (i=0:len(lst)){ :: i }
+# For-range :: exits immediately (same as unbounded loop)
+# first_match: returns the first i satisfying a condition
+var first_even_idx = (lst){
+    :: (i=0:len(lst)){
+        lst(i) % 2 == 0 :: i
+    }()
 }
-assert_eq("post-loop return value", last_index({10,20,30}), 2)
+assert_eq(":: exits immediately returning first match", first_even_idx({1,3,4,7,8}), 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,7 +165,7 @@ print("─── mixed loops and returns ─────────────
 # for-range then (:)= then return
 var combined = (n){
     var x = 0
-    (i=0:n){ x += i }
+    (i=0:n){ x += i }()
     (:)={ x <= 0: break, x -= 1 }
     :: x
 }
@@ -171,12 +174,12 @@ assert_eq("for-range then (:)= then return", combined(4), 0)
 # map / filter / reduce as reusable higher-order functions
 var map_fn = (lst, f){
     var out = list()
-    (i=0:len(lst)){ push(out, f(lst(i))) }
+    (i=0:len(lst)){ push(out, f(lst(i))) }()
     :: out
 }
 var reduce_fn = (lst, f, init){
     var acc = init
-    (i=0:len(lst)){ acc = f(acc, lst(i)) }
+    (i=0:len(lst)){ acc = f(acc, lst(i)) }()
     :: acc
 }
 
@@ -195,7 +198,7 @@ assert_eq("filter then map", doubled, {4, 8})
 var accumulator = []{
     total: 0,
     add_range: (n){
-        (i=0:n){ total += i }
+        (i=0:n){ total += i }()
     },
     get: (){ :: total }
 }
@@ -270,14 +273,14 @@ var i = 0
 (:)={ i >= 5: break, i += 1 }
 assert_eq("(:)= break at top level", i, 5)
 
-# for-range post-loop :: still accumulates and returns correctly
+# for-range as statement, then return the accumulated value
 var total = 0
-var result = (j=0:5){
-    total += j,
-    :: total
-}
-assert_eq("for-range post-loop :: accumulated", total,  10)
-assert_eq("for-range post-loop :: return value", result, 10)
+(j=0:5){ total += j }()
+assert_eq("for-range accumulates via side-effect", total, 10)
+
+# :: inside for-range exits immediately on first match
+var first_big = (i=0:10){ i * i > 30 :: i }()
+assert_eq(":: exits on first match (6*6=36>30)", first_big, 6)
 
 # (:){ }() explicit call
 var ctr = 0
@@ -291,8 +294,8 @@ assert_eq("(:){}() explicit call", v, 3)
 var matrix_sum = (){
     var s = 0
     (r=0:3){
-        (c=0:3){ s += r * 3 + c }
-    }
+        (c=0:3){ s += r * 3 + c }()
+    }()
     :: s
 }
 assert_eq("nested for-range loops", matrix_sum(), 36)
