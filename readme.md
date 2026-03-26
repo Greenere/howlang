@@ -224,6 +224,7 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `args()`                | List of command-line arguments                           |
 | `gc()`                  | Trigger a garbage collection cycle                       |
 | `cwd()`                 | Return the current working directory as a string         |
+| `run(cmd)`             | Execute a shell command; returns the exit code as a number |
 
 ---
 

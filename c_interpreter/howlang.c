@@ -2062,6 +2062,18 @@ BUILTIN(cwd_fn) {
     return val_str(buf);
 }
 
+/* run(cmd) — execute a shell command, returns the exit code as a number */
+BUILTIN(run_fn) {
+    NEED(1);
+    if (ARG(0)->type != VT_STR) die("run() requires a string command");
+    int code = system(ARG(0)->sval);
+    /* WEXITSTATUS extracts the real exit code from the wait() status */
+#ifdef WEXITSTATUS
+    if (code != -1) code = WEXITSTATUS(code);
+#endif
+    return val_num((double)code);
+}
+
 BUILTIN(resolve_how_fn) {
     NEED(1);
     if (ARG(0)->type!=VT_STR) die("_resolve_how() requires a string");
@@ -2461,6 +2473,7 @@ static void setup_globals(Env *env) {
     REG("args",    args_fn);
     REG("dirof",   dirof_fn);
     REG("cwd",     cwd_fn);
+    REG("run",     run_fn);
     REG("_resolve_how",     resolve_how_fn);
     REG("_push_import_dir", push_import_dir_fn);
     REG("_add_search_dir",  add_search_dir_fn);
