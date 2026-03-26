@@ -268,27 +268,44 @@ Howlang  |  Ctrl-D or quit() to exit
 | Syntax | Meaning |
 |--------|---------|
 | `(:){ ... }()` | Unbounded loop, `::` breaks and returns |
-| `(i=a:b){ ... }()` | For-range loop; `::` breaks and return with a value |
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
+| `(i=a:b){ ... }()` | For-range loop; `::` exits immediately with a value |
 
-### Branch firing rules inside loops
+### Branch firing rules
 
-Within a loop body, branches follow these rules each iteration:
+`:` and `::` branches behave the same everywhere — in functions, loops, and for-range loops. The rules are simple:
 
 - **Unconditional branches** (no condition, or `var` declarations) — always run
-- **`:` side-effect branches** — at most one fires per iteration (if/else-if semantics); once one fires, the rest are skipped
-- **`::` return/exit branches** — always evaluated regardless of whether a `:` branch already fired
+- **`:` side-effect branches** — **all** matching branches fire independently, same as in a function body
+- **`::` return/exit branches** — the first truthy one fires and exits immediately
 
-This means you can safely mix a side-effect condition and an exit condition without either blocking the other:
+This means `:` is **"if"** and `::` is **"if/else-if/return"**. They compose cleanly:
 
 ```
 var x = 0
 (:){
-    x > 1: print("x is " + str(x)),   # : fires for x=2,3
-    x >= 3 :: x,                        # :: always checked — exits at x=3
+    x > 1: print("x is " + str(x)),   # fires at x=2 AND x=3 (independent checks)
+    x >= 3 :: x,                        # exits at x=3
     x += 1
 }()
 # prints "x is 2" and "x is 3", returns 3
+```
+
+When you want mutually exclusive choices, use `::` — it stops at the first match:
+
+```
+# FizzBuzz using :: for if/else-if semantics
+var i = 1
+(:){
+    i > 20 :: none,
+    (){
+        i % 15 == 0 :: print("FizzBuzz"),
+        i % 3  == 0 :: print("Fizz"),
+        i % 5  == 0 :: print("Buzz"),
+        :: print(str(i))
+    }(),
+    i += 1
+}()
 ```
 
 Loops are also valid **statements** inside functions — a loop followed by `:: value` correctly returns after the loop completes:
@@ -296,8 +313,8 @@ Loops are also valid **statements** inside functions — a loop followed by `:: 
 ```
 var sum_to = (n){
     var acc = 0
-    (i=0:n){ acc += i }   # loop runs as a statement
-    :: acc                 # this fires after the loop, not instead of it
+    (i=0:n){ acc += i }()   # loop runs as a statement
+    :: acc                   # fires after the loop
 }
 sum_to(5)   # 10
 ```

@@ -3233,7 +3233,7 @@ static void run_loop(HowFunc *fn, Signal *sig) {
 Env *local = env_new(fn->closure);
     GC_ROOT_ENV(local);
     while (sig->type==SIG_NONE) {
-        int conditional_fired = 0;
+        /* all : branches fire independently per iteration */
         for (int i=0;i<fn->branches.len && sig->type==SIG_NONE;i++) {
             Node *b = fn->branches.nodes[i];
             if (b->type == N_VARDECL) {
@@ -3247,11 +3247,9 @@ Env *local = env_new(fn->closure);
             }
             /* branch node */
             if (b->branch.cond) {
-                /* :: (return/exit) branches are always evaluated — they must never
-                   be silently skipped by conditional_fired, as that would cause
-                   infinite loops when a side-effect branch fires before an exit.
-                   Only : (side-effect) branches participate in the one-fires rule. */
-                if (conditional_fired && !b->branch.is_ret) continue;
+                /* All : branches are evaluated independently — consistent with
+                   function semantics where all matching : branches fire.
+                   :: branches also always fire (they exit immediately on match). */
                 Value *cv = eval(b->branch.cond, local, sig);
                 if (sig->type!=SIG_NONE) { val_decref(cv); break; }
                 int ok = how_truthy(cv); val_decref(cv);
@@ -3264,7 +3262,7 @@ Env *local = env_new(fn->closure);
                 }
                 exec_body(b->branch.body, local, sig);
                 if (sig->type==SIG_BREAK) { sig->type=SIG_NONE; goto loop_done; }
-                conditional_fired = 1;
+                /* no conditional_fired — all : branches fire independently */
             } else {
                 /* unconditional */
                 if (b->branch.is_ret) {

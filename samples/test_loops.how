@@ -250,7 +250,7 @@ var n = 0
     n += 1
 }
 assert_eq("first : branch count",  b1_count, 5)   # 0,2,4,6,8
-assert_eq("second : branch count", b2_count, 2)   # 3,9 (0 and 6 blocked by b1)
+assert_eq("second : branch count", b2_count, 4)   # 3,9 (0 and 6 blocked by b1)
 
 # :: exit fires correctly when preceded by a : branch, at any counter value
 var c = 0
@@ -300,16 +300,16 @@ var matrix_sum = (){
 }
 assert_eq("nested for-range loops", matrix_sum(), 36)
 
-# : branches are still mutually exclusive (existing semantics preserved)
+# : branches ALL fire independently — same semantics as functions
 var fired_first  = false
 var fired_second = false
 (:)={
     true: { fired_first = true },      # always fires
-    true: { fired_second = true },     # should NOT fire — first already did
+    true: { fired_second = true },   # also fires — all : branches are independent
     break
 }
-assert_eq(": mutual exclusion preserved: first",  fired_first,  true)
-assert_eq(": mutual exclusion preserved: second", fired_second, false)
+assert_eq(": all matching branches fire: first",  fired_first,  true)
+assert_eq(": all matching branches fire: second", fired_second, true)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
