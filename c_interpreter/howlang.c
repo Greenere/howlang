@@ -868,8 +868,9 @@ static Node *parse_call(Parser *p) {
                 if (!p_check(p, TT_RPAREN))
                     slice_stop = parse_expr(p);
             } else if (!p_check(p,TT_RPAREN)) {
-                /* parse first arg, then check if : follows */
-                Node *first = parse_expr(p);
+                /* parse first arg at or-level (not assign-level) to prevent
+                   f(x=5) from silently assigning to outer x */
+                Node *first = parse_or(p);
                 if (p_check(p, TT_COLON)) {
                     is_slice = 1;
                     slice_start = first;
@@ -877,13 +878,14 @@ static Node *parse_call(Parser *p) {
                     if (!p_check(p, TT_RPAREN))
                         slice_stop = parse_expr(p);
                 } else if (is_slice == 0) {
-                    /* regular call */
+                    /* regular call — args parsed at or-level to prevent
+                       f(x=5) from silently assigning to outer x */
                     Node *c = make_node(N_CALL, line);
                     c->call.callee  = n;
                     c->call.bracket = 0;
                     nl_push(&c->call.args, first);
                     while (p_match(p,TT_COMMA) && !p_check(p,TT_RPAREN))
-                        nl_push(&c->call.args, parse_expr(p));
+                        nl_push(&c->call.args, parse_or(p));
                     p_expect(p,TT_RPAREN,"expected ')'");
                     last_line = cur_line;
                     n = c;
@@ -916,9 +918,9 @@ static Node *parse_call(Parser *p) {
             c->call.callee  = n;
             c->call.bracket = 1;
             if (!p_check(p,TT_RBRACKET)) {
-                nl_push(&c->call.args, parse_expr(p));
+                nl_push(&c->call.args, parse_or(p));
                 while (p_match(p,TT_COMMA) && !p_check(p,TT_RBRACKET))
-                    nl_push(&c->call.args, parse_expr(p));
+                    nl_push(&c->call.args, parse_or(p));
             }
             p_expect(p,TT_RBRACKET,"expected ']'");
             last_line = cur_line;
