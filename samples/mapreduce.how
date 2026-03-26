@@ -1,0 +1,147 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# mapreduce.how  —  Map / Filter / Reduce in Howlang
+#
+# Three implementations, from simple to expressive:
+#   1. Standalone functions
+#   2. Pipeline builder — reads left to right
+#   3. Parallel map-reduce over partitioned data
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Core primitives ───────────────────────────────────────────────────────────
+
+var map_fn = (lst, f){
+    var out = list(),
+    (i=0:len(lst)){ push(out, f(lst(i))) }(),
+    :: out
+}
+
+var filter_fn = (lst, pred){
+    var out = list(),
+    (i=0:len(lst)){ pred(lst(i)): push(out, lst(i)) }(),
+    :: out
+}
+
+var reduce_fn = (lst, f, init){
+    var acc = init,
+    (i=0:len(lst)){ acc = f(acc, lst(i)) }(),
+    :: acc
+}
+
+
+# ── Part 1: Standalone ────────────────────────────────────────────────────────
+print("─── Standalone ─────────────────────────────────────────────────────────")
+
+var nums = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+print(map_fn(nums, (x){ :: x * x }))
+# [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+
+print(filter_fn(nums, (x){ :: x % 2 == 0 }))
+# [2, 4, 6, 8, 10]
+
+print(reduce_fn(nums, (a, b){ :: a + b }, 0))
+# 55
+
+# Nested: sum of squares of even numbers
+print(reduce_fn(
+    map_fn(
+        filter_fn(nums, (x){ :: x % 2 == 0 }),
+        (x){ :: x * x }
+    ),
+    (a, b){ :: a + b }, 0
+))
+# 4+16+36+64+100 = 220
+
+
+# ── Part 2: Pipeline builder ──────────────────────────────────────────────────
+# Each pipe_* returns a single-arg function waiting for its input.
+# run_pipeline threads data left to right — reads like the computation.
+print("─── Pipeline ───────────────────────────────────────────────────────────")
+
+var pipe_map    = (f){       :: (lst){ :: map_fn(lst, f) } }
+var pipe_filter = (pred){    :: (lst){ :: filter_fn(lst, pred) } }
+var pipe_reduce = (f, init){ :: (lst){ :: reduce_fn(lst, f, init) } }
+
+var run_pipeline = (data, steps){
+    var result = data,
+    (i=0:len(steps)){ result = steps(i)(result) }(),
+    :: result
+}
+
+# Same computation as above, now reads left to right:
+print(run_pipeline(nums, {
+    pipe_filter((x){ :: x % 2 == 0 }),
+    pipe_map((x){ :: x * x }),
+    pipe_reduce((a, b){ :: a + b }, 0)
+}))
+# 220
+
+# Word processing pipeline
+var words = {"hello", "world", "howlang", "is", "elegant"}
+print(run_pipeline(words, {
+    pipe_filter((w){ :: len(w) > 3 }),
+    pipe_map((w){ :: len(w) }),
+    pipe_reduce((a, b){ :: a + b }, 0)
+}))
+# 5+5+7+7 = 24  (hello, world, howlang, elegant)
+
+# Product of odd numbers
+print(run_pipeline(nums, {
+    pipe_filter((x){ :: x % 2 != 0 }),
+    pipe_reduce((a, b){ :: a * b }, 1)
+}))
+# 1×3×5×7×9 = 945
+
+
+# ── Part 3: Map-reduce over partitions ───────────────────────────────────────
+# Split data into chunks, map over each, then reduce the partial results.
+# Shows how the primitives compose into a distributed-style computation.
+print("─── Map-reduce over partitions ─────────────────────────────────────────")
+
+var chunk = (lst, size){
+    var chunks = list(),
+    var i = 0,
+    (:)={
+        i >= len(lst): break,
+        var end = i + size,
+        end > len(lst): end = len(lst),
+        push(chunks, lst(i:end)),
+        i = end
+    },
+    :: chunks
+}
+
+var mapreduce = (data, mapper, reducer, zero, chunk_size){
+    # Map phase: apply mapper to each chunk independently
+    var chunks  = chunk(data, chunk_size),
+    var partial = map_fn(chunks, (c){
+        :: reduce_fn(map_fn(c, mapper), reducer, zero)
+    }),
+    # Reduce phase: combine partial results
+    :: reduce_fn(partial, reducer, zero)
+}
+
+# Sum of squares across 3-element chunks
+var big = {1,2,3,4,5,6,7,8,9,10,11,12}
+print(mapreduce(
+    big,
+    (x){ :: x * x },        # mapper: square each element
+    (a, b){ :: a + b },     # reducer: sum
+    0,
+    3                        # chunk size
+))
+# 1+4+9 + 16+25+36 + 49+64+81 + 100+121+144 = 650
+# Verify:
+print(reduce_fn(map_fn(big, (x){ :: x*x }), (a,b){ :: a+b }, 0))
+# 650 ✓
+
+# Max word-length across 2-word chunks
+var sentence = {"the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog"}
+print(mapreduce(
+    sentence,
+    (w){ :: len(w) },
+    (a, b){ a > b :: a, :: b },
+    0,
+    2
+))
+# longest word: "quick"=5, "brown"=5, "jumps"=5 → 5
