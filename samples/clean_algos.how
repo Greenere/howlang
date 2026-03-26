@@ -1,0 +1,304 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# clean_algos.how  —  Algorithms that used to be awkward, now clean
+#
+# Three language improvements made these elegant:
+#
+#   continue       — skip rest of current iteration (like Python/JS continue)
+#   m(k) → none   — missing keys return none instead of crashing
+#   m(k) = v       — dynamic key write, works on maps and lists
+#
+# Each algorithm shows before/after in comments.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── 1. BFS ───────────────────────────────────────────────────────────────────
+# Before: set_key/get_key/has_key everywhere, no way to skip gracefully
+# After:  m(k)->none replaces has_key; m(k)=v replaces set_key; continue skips visited
+
+var bfs = (graph, start){
+    var visited = map(),
+    var queue   = list(),
+    var qi      = 0,
+    visited(start) = true,
+    push(queue, start),
+    (:){
+        qi >= len(queue) :: queue,
+        var node = queue(qi),
+        qi += 1,
+        var neighbors = graph(node),
+        neighbors == none: continue,         # node has no edges — skip
+        (i=0:len(neighbors)){
+            var nb = neighbors(i),
+            visited(nb) != none: continue,   # already seen — skip
+            visited(nb) = true,
+            push(queue, nb)
+        }()
+    }(),
+    :: queue
+}
+
+var g = map()
+g("A") = {"B", "C"}
+g("B") = {"A", "D"}
+g("C") = {"A", "D"}
+g("D") = {"B", "C"}
+print("── BFS ──────────────────────────────────────────")
+print(bfs(g, "A"))   # [A, B, C, D]
+
+
+# ── 2. Dijkstra ───────────────────────────────────────────────────────────────
+# Before: set_key(dist, v, newd), get_key(dist, v), has_key(visited, u) — verbose
+# After:  dist(v) = newd, dist(v), visited(u) != none — reads like math
+
+var dijkstra = (edges, start, stop){
+    var adj = map(),
+    (i=0:len(edges)){
+        var e = edges(i),
+        adj(e.from) == none: adj(e.from) = list(),
+        push(adj(e.from), e)
+    }(),
+
+    var dist    = map(),
+    var visited = map(),
+    dist(start) = 0,
+
+    (:){
+        # Find unvisited node with smallest known distance
+        var u    = none,
+        var best = 999999999,
+        var ks   = keys(dist),
+        (i=0:len(ks)){
+            var k = ks(i),
+            visited(k) != none: continue,   # skip visited
+            dist(k) >= best:    continue,   # not better
+            best = dist(k), u = k
+        }(),
+        u == none :: none,
+        u == stop :: dist(stop),
+
+        visited(u) = true,
+
+        var nbrs = adj(u),
+        nbrs == none: continue,
+        (i=0:len(nbrs)){
+            var e    = nbrs(i),
+            var v    = e.to,
+            var newd = dist(u) + e.w,
+            dist(v) == none:  { dist(v) = newd, continue },   # first time seeing v
+            newd < dist(v):     dist(v) = newd               # found shorter path
+        }()
+    }(),
+    :: dist(stop)
+}
+
+print("── Dijkstra ──────────────────────────────────────")
+var edges = {
+    {"from":"A","to":"B","w":4},
+    {"from":"A","to":"C","w":2},
+    {"from":"B","to":"C","w":1},
+    {"from":"C","to":"D","w":3},
+    {"from":"B","to":"D","w":5}
+}
+print(dijkstra(edges, "A", "D"))   # 5  (A→C→D)
+print(dijkstra(edges, "A", "B"))   # 4
+print(dijkstra(edges, "A", "C"))   # 2
+
+
+# ── 3. Histogram / word count ─────────────────────────────────────────────────
+# Before: has_key check + get_key + set_key — three builtins for one increment
+#   has_key(counts, k): set_key(counts, k, get_key(counts, k) + 1)
+#   has_key(counts, k) == false: set_key(counts, k, 1)
+# After: two clean branches
+
+var histogram = (lst){
+    var counts = map(),
+    (i=0:len(lst)){
+        var k = str(lst(i)),
+        counts(k) == none: { counts(k) = 1,  continue },
+        counts(k) += 1
+    }(),
+    :: counts
+}
+
+print("── Histogram ─────────────────────────────────────")
+var h = histogram({1,2,1,3,2,1,4,1,2})
+print(h("1"))   # 4
+print(h("2"))   # 3
+
+var words = {"the","cat","sat","on","the","mat","the","cat"}
+var wc = histogram(words)
+print(wc("the"))   # 3
+print(wc("cat"))   # 2
+
+
+# ── 4. Flood fill ─────────────────────────────────────────────────────────────
+# Before: one big nested guard: r>=0 and r<rows and c>=0 and c<cols and grid(r)(c)==old: { work }
+# After:  flat guards with continue, grid(r)(c) = new_col for mutation
+
+var flood_fill = (grid, row, col, old_col, new_col){
+    old_col == new_col :: none,
+    var rows  = len(grid),
+    var cols  = len(grid(0)),
+    var stack = list(),
+    push(stack, {row, col}),
+    (:){
+        len(stack) == 0 :: none,
+        var pos = pop(stack),
+        var r   = pos(0),
+        var c   = pos(1),
+        r < 0 or r >= rows:     continue,
+        c < 0 or c >= cols:     continue,
+        grid(r)(c) != old_col:  continue,
+        grid(r)(c) = new_col,
+        push(stack, {r-1,c}),
+        push(stack, {r+1,c}),
+        push(stack, {r,c-1}),
+        push(stack, {r,c+1})
+    }()
+}
+
+print("── Flood fill ────────────────────────────────────")
+var grid = {
+    {1,1,1,0},
+    {1,1,0,0},
+    {1,0,0,1},
+    {0,0,1,1}
+}
+flood_fill(grid, 0, 0, 1, 2)
+(i=0:4){ print(grid(i)) }()
+# [2,2,2,0]
+# [2,2,0,0]
+# [2,0,0,1]
+# [0,0,1,1]
+
+
+# ── 5. Tokenizer / state machine ──────────────────────────────────────────────
+# Before: needed a "handled" flag to prevent multiple states firing;
+#         duplicated start-state transitions as workaround for no "unget"
+# After:  continue makes each state's path explicit and flat;
+#         manual index (don't advance i) replaces "unget" naturally
+
+var tokenize = (s){
+    var tokens = list(),
+    var token  = "",
+    var state  = "start",
+    var i      = 0,
+    (:){
+        i >= len(s) :: tokens,
+        var ch = s(i:i+1),
+        var st = state,   # capture state before any mutation this iteration
+
+        st == "start" and (ch == " " or ch == "\n"):  { i += 1, continue },
+        st == "start" and ch >= "0" and ch <= "9":    { token = ch, state = "number", i += 1, continue },
+        st == "start" and ch >= "a" and ch <= "z":    { token = ch, state = "ident",  i += 1, continue },
+        st == "start": { push(tokens, {"t": "op", "v": ch}), i += 1, continue },
+
+        st == "number" and ch >= "0" and ch <= "9":   { token += ch, i += 1, continue },
+        st == "number": {
+            push(tokens, {"t": "num", "v": token}),
+            token = "", state = "start"   # don't advance i — reprocess ch as "start"
+        },
+
+        st == "ident" and (ch >= "a" and ch <= "z" or ch >= "0" and ch <= "9"): {
+            token += ch, i += 1, continue
+        },
+        st == "ident": {
+            push(tokens, {"t": "id", "v": token}),
+            token = "", state = "start"   # don't advance i — reprocess ch as "start"
+        }
+    }(),
+    state == "number": push(tokens, {"t": "num", "v": token}),
+    state == "ident":  push(tokens, {"t": "id",  "v": token}),
+    :: tokens
+}
+
+print("── Tokenizer ─────────────────────────────────────")
+var toks = tokenize("x2 + 123 * abc")
+(i=0:len(toks)){
+    var t = toks(i),
+    print("{t.t}:{t.v}")
+}()
+# id:x2  op:+  num:123  op:*  id:abc
+
+
+# ── 6. Sieve of Eratosthenes ──────────────────────────────────────────────────
+# Before: has_key(composite, str(i)) verbose membership test
+# After:  composite(str(i)) != none reads as a natural map lookup
+
+var sieve = (n){
+    var composite = map(),
+    (i=2:n){
+        composite(str(i)) != none: continue,   # already composite — skip
+        (j=i*2:n){
+            j % i == 0: composite(str(j)) = true
+        }()
+    }(),
+    var primes = list(),
+    (i=2:n){
+        composite(str(i)) == none: push(primes, i)
+    }(),
+    :: primes
+}
+
+print("── Sieve ─────────────────────────────────────────")
+print(sieve(30))   # [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+print("{len(sieve(100))} primes below 100")   # 25
+
+
+# ── 7. LCS dynamic programming ───────────────────────────────────────────────
+# Before: set_key(dp(i), j, val) for every cell — three nested names for one write
+# After:  dp(i)(j) = val — as clean as any other language
+
+var lcs = (a, b){
+    var m = len(a),
+    var n = len(b),
+    var dp = list(),
+    (i=0:m+1){
+        var row = list(),
+        (j=0:n+1){ push(row, 0) }(),
+        push(dp, row)
+    }(),
+    (i=1:m+1){
+        (j=1:n+1){
+            a(i-1:i) == b(j-1:j): { dp(i)(j) = dp(i-1)(j-1) + 1, continue },
+            var best = dp(i-1)(j),
+            dp(i)(j-1) > best: best = dp(i)(j-1),
+            dp(i)(j) = best
+        }()
+    }(),
+    :: dp(m)(n)
+}
+
+print("── LCS ───────────────────────────────────────────")
+print(lcs("ABCBDAB", "BDCAB"))    # 4
+print(lcs("AGGTAB",  "GXTXAYB")) # 4
+
+
+# ── 8. Matrix multiply ────────────────────────────────────────────────────────
+# Before: set_key(C(i), j, sum) — awkward for 2D array writes
+# After:  C(i)(j) = sum — mirrors the mathematical C[i][j] = Σ A[i][k]·B[k][j]
+
+var mat_mul = (A, B){
+    var ra = len(A), var ca = len(A(0)), var cb = len(B(0)),
+    var C = list(),
+    (i=0:ra){
+        var row = list(),
+        (j=0:cb){ push(row, 0) }(),
+        push(C, row)
+    }(),
+    (i=0:ra){
+        (j=0:cb){
+            var sum = 0,
+            (k=0:ca){ sum += A(i)(k) * B(k)(j) }(),
+            C(i)(j) = sum
+        }()
+    }(),
+    :: C
+}
+
+print("── Matrix multiply ───────────────────────────────")
+var A = {{1,2,3},{4,5,6}}
+var B = {{7,8},{9,10},{11,12}}
+var C = mat_mul(A, B)
+print(C(0))   # [58, 64]
+print(C(1))   # [139, 154]
