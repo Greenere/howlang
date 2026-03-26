@@ -268,8 +268,8 @@ Howlang  |  Ctrl-D or quit() to exit
 | Syntax | Meaning |
 |--------|---------|
 | `(:){ ... }()` | Unbounded loop, `::` breaks and returns |
+| `(i=a:b){ ... }()` | For-range loop; `::` breaks and return with a value |
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
-| `(i=a:b){ ... }()` | For-range loop; `::` exits immediately with a value |
 
 ### Branch firing rules inside loops
 
