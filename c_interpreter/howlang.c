@@ -105,7 +105,7 @@ static char *buf_done(Buf *b) {
 
 typedef enum {
     TT_EOF, TT_NUMBER, TT_STRING, TT_BOOL, TT_NONE, TT_IDENT,
-    TT_VAR, TT_BREAK, TT_HOW, TT_WHERE, TT_AS,
+    TT_VAR, TT_BREAK, TT_CONTINUE, TT_HOW, TT_WHERE, TT_AS,
     TT_LPAREN, TT_RPAREN, TT_LBRACE, TT_RBRACE, TT_LBRACKET, TT_RBRACKET,
     TT_COMMA, TT_DOT, TT_COLON, TT_DCOLON,
     TT_PLUS, TT_MINUS, TT_STAR, TT_SLASH, TT_PERCENT,
@@ -216,6 +216,7 @@ static TokenList *lex(const char *src) {
             else if (!strcmp(tmp,"or"))    { t.type = TT_OR; }
             else if (!strcmp(tmp,"not"))   { t.type = TT_NOT; }
             else if (!strcmp(tmp,"break")) { t.type = TT_BREAK; }
+            else if (!strcmp(tmp,"continue")) { t.type = TT_CONTINUE; }
             else if (!strcmp(tmp,"how"))   { t.type = TT_HOW; }
             else if (!strcmp(tmp,"where")) { t.type = TT_WHERE; }
             else if (!strcmp(tmp,"as"))    { t.type = TT_AS; }
@@ -286,7 +287,7 @@ typedef enum {
     N_VARDECL,
     N_EXPRSTMT,
     N_IMPORT,
-    N_BREAK,
+    N_BREAK, N_NEXT,
     N_WHERE,   /* where "dir" — adds dir to import search path */
     N_PROG,
 } NodeType;
@@ -572,6 +573,15 @@ static Node *parse_branch(Parser *p) {
         Node *n = make_node(N_BRANCH, line);
         n->branch.cond = NULL;
         n->branch.body = make_node(N_BREAK, line);
+        n->branch.is_ret = 1;
+        return n;
+    }
+    /* next — skip rest of iteration, advance to next */
+    if (p_check(p, TT_CONTINUE)) {
+        p_adv(p);
+        Node *n = make_node(N_BRANCH, line);
+        n->branch.cond = NULL;
+        n->branch.body = make_node(N_NEXT, line);
         n->branch.is_ret = 1;
         return n;
     }
@@ -1073,6 +1083,10 @@ static Node *parse_atom(Parser *p) {
     if (t == TT_BREAK) {
         p_adv(p);
         return make_node(N_BREAK,line);
+    }
+    if (t == TT_CONTINUE) {
+        p_adv(p);
+        return make_node(N_NEXT,line);
     }
 
     /* [ params ] { body } — class expression */
@@ -1894,7 +1908,7 @@ typedef struct SignalReturn { Value *val; } SignalReturn;
 typedef struct SignalBreak  { int dummy; } SignalBreak;
 
 /* We use a linked list of "signal frames" instead of exceptions */
-typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK } SigType;
+typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK, SIG_NEXT } SigType;
 typedef struct { SigType type; Value *retval; } Signal;
 
 /* Global interpreter state */
@@ -2679,6 +2693,9 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     case N_BREAK:
         sig->type = SIG_BREAK;
         return val_none();
+    case N_NEXT:
+        sig->type = SIG_NEXT;
+        return val_none();
 
     case N_IDENT: {
         Value *v = env_get(env, node->sval);
@@ -2827,6 +2844,45 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 val_decref(newv);
             }
             GC_UNROOT_VALUE();
+            GC_UNROOT_VALUE();
+            val_decref(obj); val_decref(val);
+            return val_none();
+        }
+        /* m(k) = v  or  m(k) += v — dynamic key assignment */
+        if (tgt->type == N_CALL && tgt->call.args.len == 1 && !tgt->call.bracket) {
+            Value *obj = eval(tgt->call.callee, env, sig);
+            GC_ROOT_VALUE(obj);
+            if (sig->type!=SIG_NONE) { GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); val_decref(val); return obj; }
+            Value *key = eval(tgt->call.args.nodes[0], env, sig);
+            if (sig->type!=SIG_NONE) { GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); val_decref(val); val_decref(obj); return key; }
+            if (obj->type==VT_MAP) {
+                char *ks = val_repr(key); val_decref(key);
+                if (!strcmp(op,"=")) {
+                    map_set(obj->map, ks, val);
+                } else {
+                    Value *oldv = map_get(obj->map, ks);
+                    if (!oldv) oldv = val_none();
+                    Value *newv = apply_augop(oldv, val, op, node->line);
+                    map_set(obj->map, ks, newv);
+                    val_decref(newv);
+                }
+                free(ks);
+            } else if (obj->type==VT_LIST) {
+                int idx = (int)key->nval; val_decref(key);
+                HowList *l = obj->list;
+                if (idx<0||idx>=(int)l->len)
+                    die("list index %d out of bounds in assignment (line %d)",idx,node->line);
+                if (!strcmp(op,"=")) {
+                    val_decref(l->items[idx]);
+                    l->items[idx] = val_incref(val);
+                } else {
+                    Value *newv = apply_augop(l->items[idx], val, op, node->line);
+                    val_decref(l->items[idx]);
+                    l->items[idx] = newv;
+                }
+            } else {
+                die("() assignment requires map or list (line %d)", node->line);
+            }
             GC_UNROOT_VALUE();
             val_decref(obj); val_decref(val);
             return val_none();
@@ -3084,6 +3140,7 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
                 val_decref(iv);
                 run_branches(&fn->branches, local, sig);
                 if (sig->type==SIG_BREAK) { sig->type=SIG_NONE; break; }
+                if (sig->type==SIG_NEXT)  { sig->type=SIG_NONE; continue; }
             }
             GC_UNROOT_ENV();
             env_decref(local);
@@ -3119,7 +3176,7 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
         if (argc!=1) die("map call requires exactly 1 argument (line %d)",line);
         char *ks = val_repr(args[0]);
         Value *v = map_get(callee->map, ks); free(ks);
-        if (!v) die("key not found in map (line %d)",line);
+        if (!v) return val_none();  /* missing key → none */
         return val_incref(v);
     }
     /* List call: list(i) → list[i] */
@@ -3215,6 +3272,8 @@ static void exec_body(Node *body, Env *env, Signal *sig) {
         env_decref(child);
     } else if (body->type==N_BREAK) {
         sig->type = SIG_BREAK;
+    } else if (body->type==N_NEXT) {
+        sig->type = SIG_NEXT;
     } else {
         Value *v = eval(body, env, sig);
         val_decref(v);
@@ -3262,6 +3321,7 @@ Env *local = env_new(fn->closure);
                 }
                 exec_body(b->branch.body, local, sig);
                 if (sig->type==SIG_BREAK) { sig->type=SIG_NONE; goto loop_done; }
+                if (sig->type==SIG_NEXT)  { sig->type=SIG_NONE; break; }
                 /* no conditional_fired — all : branches fire independently */
             } else {
                 /* unconditional */
@@ -3342,6 +3402,7 @@ static Value *run_for_loop(Node *node, Env *env, Signal *sig) {
                 }
                 exec_body(b->branch.body, local, &inner);
                 if(inner.type==SIG_BREAK){inner.type=SIG_NONE; goto for_done;}
+                if(inner.type==SIG_NEXT) {inner.type=SIG_NONE; break;}
                 if(inner.type==SIG_RETURN){
                     val_decref(result); result=inner.retval;
                     inner.type=SIG_NONE; goto for_done;

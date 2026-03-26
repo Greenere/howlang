@@ -46,6 +46,7 @@ nums(0)       # 10
 nums(1:3)     # {20, 30}   — slice [1, 3)
 nums(:2)      # {10, 20}   — slice from start
 nums(2:)      # {30, 40, 50} — slice to end
+nums(99)      # none        — out of bounds returns none
 {42}          # single-element list
 len(nums)     # 5
 
@@ -53,11 +54,32 @@ len(nums)     # 5
 {1,2} + {3,4}  # {1,2,3,4}
 ```
 
-**Map** — any-keyed dictionary:
+**Map** — any-keyed dictionary, called like a function with a dynamic key:
 
 ```
 var m = {"name": "Alice", "age": 30}
 m("name")        # "Alice"
+m("missing")     # none  — missing keys return none, never crash
+
+# Dynamic key write — same syntax as reading, just assign to it:
+var scores = map()
+scores("alice") = 95
+scores("bob")   = 87
+scores("alice") += 5   # augmented assignment works too
+print(scores("alice")) # 100
+
+# Dot syntax still works for literal key names:
+m.name           # "Alice"
+m.name = "Bob"   # update field
+```
+
+**List** index write uses the same call-assignment syntax:
+
+```
+var lst = {10, 20, 30}
+lst(1) = 99      # [10, 99, 30]
+lst(0) += 5      # [15, 99, 30]
+lst(9)           # none — out of bounds returns none
 ```
 
 ### Functions
@@ -143,6 +165,32 @@ my_loop()   # prints 0, 1, 2
 my_loop()   # prints 0, 1, 2 again
 ```
 
+#### Loop control: `break` and `continue`
+
+Inside any loop, `break` exits immediately and `continue` skips the rest of the
+current iteration and advances to the next:
+
+```
+# Skip even numbers, collect odds
+var odds = list()
+(i=0:10){
+    i % 2 == 0: continue,   # skip evens
+    push(odds, i)
+}()
+# odds == {1, 3, 5, 7, 9}
+
+# Multiple guards — continue makes each guard independent and flat
+(i=0:len(items)){
+    items(i) == none: continue,   # skip nulls
+    items(i) < 0:    continue,   # skip negatives
+    push(results, items(i) * 2)  # only valid, non-negative items reach here
+}()
+```
+
+`break` and `continue` work the same way in `(:){ }()` unbounded loops.
+
+---
+
 ### Classes
 
 Declared with `[params]{ field: value, ... }`, instantiated with `Name[args]`.
@@ -211,10 +259,10 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `pop(lst)`              | Remove and return last element                           |
 | `keys(m)`               | List of keys in a map or instance                        |
 | `values(m)`             | List of values in a map or instance                      |
-| `has_key(m, k)`         | True if key exists in map or list index is valid         |
-| `get_key(m, k)`         | Get by key/index, returns `none` if out of range         |
-| `set_key(m, k, v)`      | Set by key/index (mutates in place)                      |
-| `del_key(m, k)`         | Delete a key from a map                                  |
+| `has_key(m, k)`         | True if key exists (`m(k) != none` is equivalent)        |
+| `get_key(m, k)`         | Get by key/index (`m(k)` is equivalent)                  |
+| `set_key(m, k, v)`      | Set by key/index (`m(k) = v` is equivalent)              |
+| `del_key(m, k)`         | Delete a key from a map (no call-syntax equivalent)      |
 | `abs(n)`                | Absolute value                                           |
 | `floor(n)`              | Floor                                                    |
 | `ceil(n)`               | Ceiling                                                  |
@@ -278,6 +326,8 @@ Howlang  |  Ctrl-D or quit() to exit
 - **Unconditional branches** (no condition, or `var` declarations) — always run
 - **`:` side-effect branches** — **all** matching branches fire independently, same as in a function body
 - **`::` return/exit branches** — the first truthy one fires and exits immediately
+- **`continue`** — skips remaining branches for this iteration, advances to next
+- **`break`** — exits the loop entirely
 
 This means `:` is **"if"** and `::` is **"if/else-if/return"**. They compose cleanly:
 
