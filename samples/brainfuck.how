@@ -60,7 +60,7 @@ var _build_jumps = (prog){
     var jumps  = map(),
     var stack  = list(),
     var i      = 0,
-    (0:len(prog)) = i{
+    (i=0:len(prog)){
         var c = _char_at(prog, i),
         c == "[": push(stack, i),
         c == "]": {

@@ -141,7 +141,7 @@ c7.put("m", 1)
 c7.put("n", 2)
 
 # Repeatedly access "m" — "n" should always be LRU and get evicted
-(0:5) = i{
+(i=0:5){
     c7.get("m")
 }
 c7.put("o", 3)

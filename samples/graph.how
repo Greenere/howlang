@@ -136,7 +136,7 @@ var shortest_path = (g, src, dst){
     var prev = map(),
     var ns   = g.node_list(),
     var idx  = 0,
-    (0:len(ns)) = idx{
+    (idx=0:len(ns)){
         set_key(dist, ns(idx), INF),
         set_key(prev, ns(idx), none)
     },
@@ -168,7 +168,7 @@ var shortest_path = (g, src, dst){
             # Relax edges
             var edges = g.neighbors(u),
             var ei    = 0,
-            (0:len(edges)) = ei{
+            (ei=0:len(edges)){
                 var e      = edges(ei),
                 var v      = e.to,
                 var new_d  = d_u + e.weight,

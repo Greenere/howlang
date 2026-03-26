@@ -1093,45 +1093,42 @@ static Node *parse_atom(Parser *p) {
             return fn;
         }
 
-        /* lookahead for for-range: scan for : at depth 0, then ), =, IDENT, { */
-        /* We scan without consuming */
+        /* lookahead for for-range: new syntax (var=start:stop){ }
+           Pattern inside ( ): IDENT EQ expr COLON expr then RPAREN LBRACE */
         {
-            int depth = 0;
-            int found_colon=0, found_rparen=0, found_eq=0, found_ident=0, is_forrange=0;
-            int scan = p->pos;
-            while (scan < p->tl->len) {
-                TT st = p->tl->toks[scan].type;
-                if (st==TT_LPAREN||st==TT_LBRACKET) { depth++; scan++; continue; }
-                if ((st==TT_RPAREN||st==TT_RBRACKET) && depth>0) { depth--; scan++; continue; }
-                if (depth==0) {
-                    if (!found_colon && st==TT_COLON) { found_colon=1; scan++; continue; }
-                    if (found_colon && !found_rparen && st==TT_RPAREN) { found_rparen=1; scan++; continue; }
-                    if (found_rparen && !found_eq && st==TT_EQ) { found_eq=1; scan++; continue; }
-                    if (found_eq && !found_ident && st==TT_IDENT) { found_ident=1; scan++; continue; }
-                    if (found_ident && st==TT_LBRACE) { is_forrange=1; break; }
-                    /* bail conditions */
-                    if (found_rparen && !found_eq && st!=TT_EQ) break;
-                    if (found_eq && !found_ident && st!=TT_IDENT) break;
-                    if (found_ident && st!=TT_LBRACE) break;
-                    /* bail: ) at depth 0 before finding : means not a for-range */
-                    if (!found_colon && st==TT_RPAREN) break;
-                    if (!found_colon && st!=TT_COLON && st!=TT_LPAREN && st!=TT_LBRACKET
-                            && st!=TT_EOF) { scan++; continue; }
-                    if (found_colon && !found_rparen && st!=TT_RPAREN
-                            && st!=TT_LPAREN && st!=TT_LBRACKET) { scan++; continue; }
+            int is_forrange = 0;
+            /* must start with IDENT then EQ at the current position */
+            if (p_check(p, TT_IDENT) && p_peek(p,1)->type == TT_EQ) {
+                /* scan forward: skip past the EQ, find a COLON at depth 0
+                   before RPAREN, then RPAREN followed by LBRACE */
+                int scan = p->pos + 2;  /* skip IDENT and EQ */
+                int depth = 0;
+                int found_colon = 0, found_rparen = 0;
+                while (scan < p->tl->len) {
+                    TT st = p->tl->toks[scan].type;
                     if (st==TT_EOF) break;
+                    /* track nesting depth; LBRACE only counts before we find RPAREN */
+                    if (!found_rparen && (st==TT_LPAREN||st==TT_LBRACKET||st==TT_LBRACE)) { depth++; scan++; continue; }
+                    if (!found_rparen && (st==TT_RPAREN||st==TT_RBRACKET||st==TT_RBRACE) && depth>0) { depth--; scan++; continue; }
+                    if (depth==0) {
+                        if (!found_colon && st==TT_COLON) { found_colon=1; scan++; continue; }
+                        if (found_colon && !found_rparen && st==TT_RPAREN) { found_rparen=1; scan++; continue; }
+                        if (found_rparen && st==TT_LBRACE) { is_forrange=1; break; }
+                        if (found_rparen) break; /* something other than { after ) */
+                        if (!found_colon && st==TT_RPAREN) break; /* no colon — not a range */
+                    }
+                    scan++;
                 }
-                scan++;
             }
             if (is_forrange) {
-                /* parse start expr */
+                /* consume: IDENT EQ start COLON stop RPAREN */
+                char *ivar = xstrdup(p_expect(p,TT_IDENT,"expected loop var")->sval);
+                p_expect(p,TT_EQ,"expected '='");
                 Node *start = NULL;
                 if (!p_check(p,TT_COLON)) start = parse_expr(p);
                 p_expect(p,TT_COLON,"expected ':'");
                 Node *stop  = parse_expr(p);
                 p_expect(p,TT_RPAREN,"expected ')'");
-                p_expect(p,TT_EQ,"expected '='");
-                char *ivar = xstrdup(p_expect(p,TT_IDENT,"expected loop var")->sval);
                 Node *n = make_node(N_FORLOOP,line);
                 n->forloop.iter_var = ivar;
                 n->forloop.start    = start;

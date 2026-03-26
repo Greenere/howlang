@@ -397,7 +397,7 @@ eval_node = (node, env){
         items(0)("k") == none: {
             var lst = list(),
             var ii = 0,
-            (0:len(items)) = ii{
+            (ii=0:len(items)){
                 var rv2 = eval_node(items(ii)("v"), env),
                 rv2("sig") == "ok": push(lst, rv2("val"))
             },
@@ -405,7 +405,7 @@ eval_node = (node, env){
         },
         var m = map(),
         var ii = 0,
-        (0:len(items)) = ii{
+        (ii=0:len(items)){
             var rk2 = eval_node(items(ii)("k"), env),
             var rv2 = eval_node(items(ii)("v"), env),
             rk2("sig") == "ok" and rv2("sig") == "ok": {
@@ -570,7 +570,7 @@ eval_block = (stmts, env){
     var child = env_new(env),
     var si = 0,
     var result = ok_sig(none),
-    (0:len(stmts)) = si{
+    (si=0:len(stmts)){
         result("sig") != "ok": break,
         var stmt = stmts(si),
         var stag = stmt("tag"),
@@ -687,7 +687,7 @@ call_fn = (fn, args){
     # Normal function
     var local = env_new(fn("env")),
     var pi = 0,
-    (0:len(fn("params"))) = pi{
+    (pi=0:len(fn("params"))){
         env_set(local, fn("params")(pi), args(pi))
     },
     var r = eval_branches(fn("branches"), local),
@@ -704,14 +704,14 @@ var instantiate_class = (cls, args, outer_env){
 
     var init_env = env_new(cls_env),
     var pi = 0,
-    (0:len(params)) = pi{
+    (pi=0:len(params)){
         env_set(init_env, params(pi), args(pi))
     },
 
     # Collect fields and run side-effects during init
     var fields = map(),
     var bi = 0,
-    (0:len(branches)) = bi{
+    (bi=0:len(branches)){
         var b = branches(bi),
         # var decl → local init variable
         b("tag") == "var_decl": {
@@ -748,7 +748,7 @@ var instantiate_class = (cls, args, outer_env){
     # Re-wrap method closures to close over inst_env
     var fk = keys(fields),
     var ki = 0,
-    (0:len(fk)) = ki{
+    (ki=0:len(fk)){
         var k = fk(ki),
         var v = get_key(fields, k),
         type(v) == "map" and has_key(v, "tag") and v("tag") == "closure": {

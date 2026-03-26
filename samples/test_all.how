@@ -91,7 +91,7 @@ assert_eq("break loop sum", total, 10)
 # Test 5: for-range loop post-loop return
 # --------------------------------------------------
 var total2 = 0
-var result = (0:5) = j{
+var result = (j=0:5){
     total2 += j,
     :: total2
 }

@@ -118,15 +118,16 @@ var i = 0
 # i is now 5
 ```
 
-#### For-range loop: `(start:stop) = varname { }`
+#### For-range loop: `(var=start:stop){ }`
 
-Iterates `varname` over `[start, stop)`. Side-effect branches (`:`) run
-each iteration. A `:: expr` branch is the **post-loop return value** —
-it runs once after all iterations complete (not on every iteration):
+Iterates `var` over `[start, stop)`. The variable is declared inline in the
+parameter position — consistent with how parameters are always written in `( )`.
+Side-effect branches (`:`) run each iteration. A `:: expr` branch is the
+**post-loop return value** — it runs once after all iterations complete:
 
 ```
 var total = 0
-(0:5) = i{
+(i=0:5){
     total += i      # runs for i = 0,1,2,3,4
 }
 # total == 10
@@ -134,7 +135,7 @@ var total = 0
 # With a return value:
 var max_fn = (nums){
     var cur = nums(0),
-    :: (1:len(nums)) = i{
+    :: (i=1:len(nums)){
         cur < nums(i): cur = nums(i),
         :: cur           # returned once after all iterations
     }
@@ -267,7 +268,7 @@ Howlang  |  Ctrl-D or quit() to exit
 |--------|---------|
 | `(:){ ... }()` | Unbounded loop, `::` breaks and returns |
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
-| `(a:b) = i { ... }` | For-range loop; `::` in body is post-loop return value |
+| `(i=a:b){ ... }` | For-range loop; `::` in body is post-loop return value |
 
 ---
 
