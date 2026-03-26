@@ -3195,7 +3195,11 @@ Env *local = env_new(fn->closure);
             }
             /* branch node */
             if (b->branch.cond) {
-                if (conditional_fired) continue;
+                /* :: (return/exit) branches are always evaluated — they must never
+                   be silently skipped by conditional_fired, as that would cause
+                   infinite loops when a side-effect branch fires before an exit.
+                   Only : (side-effect) branches participate in the one-fires rule. */
+                if (conditional_fired && !b->branch.is_ret) continue;
                 Value *cv = eval(b->branch.cond, local, sig);
                 if (sig->type!=SIG_NONE) { val_decref(cv); break; }
                 int ok = how_truthy(cv); val_decref(cv);

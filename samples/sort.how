@@ -14,6 +14,6 @@ var sort = (nums){
     :: merge(sort(nums(:len(nums)/2)), sort(nums(len(nums)/2:)))
 }
 
-var nums = {1,2,3,4,5}
+var nums = {3,4,2,1,5,7,10,-1}
 
 print(sort(nums))

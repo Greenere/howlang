@@ -1,0 +1,315 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# test_loops.how — Tests for Howlang loop semantics
+#
+# Covers two classes of bugs that were fixed:
+#
+# 1. LOOP-AS-STATEMENT: a loop followed by a return value was mis-parsed,
+#    causing functions to silently return none:
+#
+#      var f = (){
+#          (i=0:n){ ... }   ← was parsed as branch condition, not statement
+#          :: result         ← was parsed as the branch body, never fired
+#      }
+#
+# 2. CONDITIONAL BLOCKING EXIT: a side-effect branch firing before an exit
+#    branch would permanently block that exit, causing infinite loops:
+#
+#      (:){
+#          x > 1: print("a"),   ← fires, sets conditional_fired=1
+#          x >= 3 :: x,          ← was skipped forever → infinite loop
+#          x += 1
+#      }()
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        passed = passed + 1,
+        print("  PASS  " + label)
+    },
+    got != expected: {
+        failed = failed + 1,
+        print("  FAIL  " + label + "  got=" + str(got) + "  expected=" + str(expected))
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("─── for-range as statement ──────────────────────────────────────────────")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Basic: for-range runs as a side effect, then :: value fires
+var sum_to = (n){
+    var acc = 0
+    (i=0:n){ acc += i }
+    :: acc
+}
+assert_eq("sum 0..4",  sum_to(5), 10)
+assert_eq("sum 0..0",  sum_to(0), 0)
+assert_eq("sum 0..1",  sum_to(1), 0)
+
+# For-range mutates outer var, return uses it
+var count_evens = (lst){
+    var count = 0
+    (i=0:len(lst)){
+        lst(i) % 2 == 0: count += 1
+    }
+    :: count
+}
+assert_eq("count evens mixed",    count_evens({1,2,3,4,5,6}), 3)
+assert_eq("count evens all-odd",  count_evens({1,3,5}),       0)
+assert_eq("count evens all-even", count_evens({2,4,6}),       3)
+
+# Two for-range loops then a return
+var double_sum = (){
+    var total = 0
+    (i=0:3){ total += i }      # 0+1+2 = 3
+    (j=0:4){ total += j }      # 3+0+1+2+3 = 9
+    :: total
+}
+assert_eq("two for-ranges then return", double_sum(), 9)
+
+# For-range building a list, then return that list
+var squares = (n){
+    var out = list()
+    (i=0:n){ push(out, i * i) }
+    :: out
+}
+assert_eq("squares 0..4",  squares(5), {0,1,4,9,16})
+assert_eq("squares empty", squares(0), list())
+
+# For-range inside a closure returned from a function
+var make_summer = (n){
+    :: (){
+        var s = 0
+        (i=0:n){ s += i }
+        :: s
+    }
+}
+var sum5  = make_summer(5)
+var sum10 = make_summer(10)
+assert_eq("closure sum 0..4", sum5(),  10)
+assert_eq("closure sum 0..9", sum10(), 45)
+
+# For-range post-loop :: (runs once after all iterations, not per-iteration)
+var last_index = (lst){
+    :: (i=0:len(lst)){ :: i }
+}
+assert_eq("post-loop return value", last_index({10,20,30}), 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("─── (:)= loop as statement ──────────────────────────────────────────────")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Basic: (:)= runs as side effect, then :: value fires
+var countdown = (start){
+    var x = start
+    (:)={
+        x <= 0: break,
+        x -= 1
+    }
+    :: x
+}
+assert_eq("countdown from 5", countdown(5), 0)
+assert_eq("countdown from 0", countdown(0), 0)
+
+# (:)= building a result, then return
+var collect_while = (limit){
+    var out = list()
+    var n = 0
+    (:)={
+        n >= limit: break,
+        push(out, n * n),
+        n += 1
+    }
+    :: out
+}
+assert_eq("collect squares < 4", collect_while(4), {0,1,4,9})
+
+# Two (:)= loops then a return
+var zigzag = (){
+    var x = 0
+    (:)={ x >= 3: break, x += 1 }
+    (:)={ x <= 0: break, x -= 1 }
+    :: x
+}
+assert_eq("two (:)= loops then return", zigzag(), 0)
+
+# (:)= inside a higher-order function that returns a value
+var filter_fn = (lst, pred){
+    var out = list()
+    var i = 0
+    (:)={
+        i >= len(lst): break,
+        pred(lst(i)): push(out, lst(i)),
+        i += 1
+    }
+    :: out
+}
+var nums = {1,2,3,4,5,6,7,8,9,10}
+assert_eq("filter evens",      filter_fn(nums, (x){ :: x % 2 == 0 }), {2,4,6,8,10})
+assert_eq("filter > 5",        filter_fn(nums, (x){ :: x > 5 }),      {6,7,8,9,10})
+assert_eq("filter none match", filter_fn(nums, (x){ :: x > 99 }),     list())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("─── mixed loops and returns ─────────────────────────────────────────────")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# for-range then (:)= then return
+var combined = (n){
+    var x = 0
+    (i=0:n){ x += i }
+    (:)={ x <= 0: break, x -= 1 }
+    :: x
+}
+assert_eq("for-range then (:)= then return", combined(4), 0)
+
+# map / filter / reduce as reusable higher-order functions
+var map_fn = (lst, f){
+    var out = list()
+    (i=0:len(lst)){ push(out, f(lst(i))) }
+    :: out
+}
+var reduce_fn = (lst, f, init){
+    var acc = init
+    (i=0:len(lst)){ acc = f(acc, lst(i)) }
+    :: acc
+}
+
+var data = {1,2,3,4,5}
+assert_eq("map double",    map_fn(data, (x){ :: x * 2 }),   {2,4,6,8,10})
+assert_eq("map square",    map_fn(data, (x){ :: x * x }),   {1,4,9,16,25})
+assert_eq("reduce sum",    reduce_fn(data, (a,b){ :: a+b }, 0),   15)
+assert_eq("reduce product",reduce_fn(data, (a,b){ :: a*b }, 1),  120)
+
+# Compose map and filter
+var evens   = filter_fn(data, (x){ :: x % 2 == 0 })
+var doubled = map_fn(evens, (x){ :: x * 2 })
+assert_eq("filter then map", doubled, {4, 8})
+
+# Loop inside a class method
+var accumulator = []{
+    total: 0,
+    add_range: (n){
+        (i=0:n){ total += i }
+    },
+    get: (){ :: total }
+}
+var acc = accumulator[]
+acc.add_range(5)    # 0+1+2+3+4 = 10
+acc.add_range(3)    # 10+0+1+2  = 13
+assert_eq("loop in class method", acc.get(), 13)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("─── :: branches always fire regardless of conditional_fired ─────────────")
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Previously: if a : (side-effect) branch fired in iteration N, ALL subsequent
+# conditional branches — including :: exit branches — were skipped that iteration.
+# This caused infinite loops when a : branch appeared before a :: exit branch.
+# Fix: conditional_fired only blocks future : branches, never :: branches.
+
+# Basic: : branch and :: branch both fire in the same iteration
+var a = 0
+var a_printed = false
+(:)={
+    a == 2: { a_printed = true },    # : fires at a=2
+    a >= 2 :: a,                      # :: also fires at a=2 (was blocked before)
+    a += 1
+}
+assert_eq("side-effect and exit both fire", a, 2)
+assert_eq("side-effect actually ran",       a_printed, true)
+
+# Original infinite loop case — now exits correctly
+var counter = 0
+var prints = 0
+var val = (:){
+    counter > 1: { prints += 1 },   # : fires for counter=2,3
+    counter >= 3 :: counter,         # :: fires at counter=3 (was blocked before)
+    counter += 1
+}()
+assert_eq("exit not blocked by side-effect: val",    val,    3)
+assert_eq("exit not blocked by side-effect: prints", prints, 2)
+
+# : side-effect branches are still mutually exclusive with each other
+var b1_count = 0
+var b2_count = 0
+var n = 0
+(:)={
+    n >= 10: break,
+    n % 2 == 0: { b1_count += 1 },   # fires on even: 0,2,4,6,8
+    n % 3 == 0: { b2_count += 1 },   # fires only when b1 didn't: 3,9
+    n += 1
+}
+assert_eq("first : branch count",  b1_count, 5)   # 0,2,4,6,8
+assert_eq("second : branch count", b2_count, 2)   # 3,9 (0 and 6 blocked by b1)
+
+# :: exit fires correctly when preceded by a : branch, at any counter value
+var c = 0
+var c_log = list()
+(:)={
+    c > 0: push(c_log, c),    # : logs every positive value
+    c >= 4 :: c,               # :: exits at 4
+    c += 1
+}
+assert_eq("exit value after : branch", c, 4)
+assert_eq("log has entries 1,2,3,4",   c_log, {1,2,3,4})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("─── regression: existing loop semantics preserved ───────────────────────")
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (:)= with break
+var i = 0
+(:)={ i >= 5: break, i += 1 }
+assert_eq("(:)= break at top level", i, 5)
+
+# for-range post-loop :: still accumulates and returns correctly
+var total = 0
+var result = (j=0:5){
+    total += j,
+    :: total
+}
+assert_eq("for-range post-loop :: accumulated", total,  10)
+assert_eq("for-range post-loop :: return value", result, 10)
+
+# (:){ }() explicit call
+var ctr = 0
+var v = (:){
+    ctr >= 3 :: ctr,
+    ctr += 1
+}()
+assert_eq("(:){}() explicit call", v, 3)
+
+# Nested loops
+var matrix_sum = (){
+    var s = 0
+    (r=0:3){
+        (c=0:3){ s += r * 3 + c }
+    }
+    :: s
+}
+assert_eq("nested for-range loops", matrix_sum(), 36)
+
+# : branches are still mutually exclusive (existing semantics preserved)
+var fired_first  = false
+var fired_second = false
+(:)={
+    true: { fired_first = true },      # always fires
+    true: { fired_second = true },     # should NOT fire — first already did
+    break
+}
+assert_eq(": mutual exclusion preserved: first",  fired_first,  true)
+assert_eq(": mutual exclusion preserved: second", fired_second, false)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("════════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("════════════════════════════════════════════════════")

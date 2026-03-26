@@ -270,6 +270,37 @@ Howlang  |  Ctrl-D or quit() to exit
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
 | `(i=a:b){ ... }` | For-range loop; `::` in body is post-loop return value |
 
+### Branch firing rules inside loops
+
+Within a loop body, branches follow these rules each iteration:
+
+- **Unconditional branches** (no condition, or `var` declarations) — always run
+- **`:` side-effect branches** — at most one fires per iteration (if/else-if semantics); once one fires, the rest are skipped
+- **`::` return/exit branches** — always evaluated regardless of whether a `:` branch already fired
+
+This means you can safely mix a side-effect condition and an exit condition without either blocking the other:
+
+```
+var x = 0
+(:){
+    x > 1: print("x is " + str(x)),   # : fires for x=2,3
+    x >= 3 :: x,                        # :: always checked — exits at x=3
+    x += 1
+}()
+# prints "x is 2" and "x is 3", returns 3
+```
+
+Loops are also valid **statements** inside functions — a loop followed by `:: value` correctly returns after the loop completes:
+
+```
+var sum_to = (n){
+    var acc = 0
+    (i=0:n){ acc += i }   # loop runs as a statement
+    :: acc                 # this fires after the loop, not instead of it
+}
+sum_to(5)   # 10
+```
+
 ---
 
 ## File Structure
@@ -288,6 +319,7 @@ howlang/
     lru_cache_test.how  # 34-test suite for LRU cache
     graph.how           # Graph + Dijkstra module
     graph_test.how      # 32-test suite for graph
+    test_loops.how      # 41-test suite for loop semantics
 ```
 
 ---
@@ -307,4 +339,7 @@ cd samples
 
 ../howlang graph_test.how
 # 32 passed   0 failed
+
+../howlang test_loops.how
+# 41 passed   0 failed
 ```
