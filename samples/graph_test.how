@@ -181,7 +181,6 @@ assert_eq("single node X→X dist", r10.dist, 0)
 print("─── Priority queue (min-heap) directly ──────────────────────────────────")
 
 var q = graph.pq[]
-q._init()
 q.push_pq(5, "five")
 q.push_pq(1, "one")
 q.push_pq(3, "three")

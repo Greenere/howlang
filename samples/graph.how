@@ -139,12 +139,11 @@ var shortest_path = (g, src, dst){
     (idx=0:len(ns)){
         set_key(dist, ns(idx), INF),
         set_key(prev, ns(idx), none)
-    },
+    }(),
     set_key(dist, src, 0),
 
     # Priority queue: {pri=distance, val=node_name}
     var q = pq[],
-    q._init(),
     q.push_pq(0, src),
 
     # Visited set
@@ -177,7 +176,7 @@ var shortest_path = (g, src, dst){
                     set_key(prev, v, u),
                     q.push_pq(new_d, v)
                 }
-            }
+            }()
         }
     },
 

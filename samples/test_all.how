@@ -91,12 +91,9 @@ assert_eq("break loop sum", total, 10)
 # Test 5: for-range loop post-loop return
 # --------------------------------------------------
 var total2 = 0
-var result = (j=0:5){
-    total2 += j,
-    :: total2
-}
+(j=0:5){ total2 += j }()
 assert_eq("for-range accumulated total", total2, 10)
-assert_eq("for-range post-loop return", result, 10)
+assert_eq("for-range loop as statement", total2, 10)
 
 # --------------------------------------------------
 # Test 6: list(), push(), pop()

@@ -143,7 +143,7 @@ c7.put("n", 2)
 # Repeatedly access "m" — "n" should always be LRU and get evicted
 (i=0:5){
     c7.get("m")
-}
+}()
 c7.put("o", 3)
 
 assert_none("n evicted after m accessed repeatedly",  c7.get("n"))

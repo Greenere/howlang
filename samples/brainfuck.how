@@ -70,7 +70,7 @@ var _build_jumps = (prog){
                 set_key(jumps, str(i),    str(open))
             }
         }
-    },
+    }(),
     :: jumps
 }
 
