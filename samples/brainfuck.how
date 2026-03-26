@@ -66,8 +66,8 @@ var _build_jumps = (prog){
         c == "]": {
             len(stack) > 0: {
                 var open = pop(stack),
-                set_key(jumps, open, i),
-                set_key(jumps, i,    open)
+                set_key(jumps, str(open), str(i)),
+                set_key(jumps, str(i),    str(open))
             }
         }
     },
@@ -95,28 +95,28 @@ var bf_run = (source){
         cmd == ">": { dp = dp + 1 },
         cmd == "<": { dp = dp - 1 },
         cmd == "+": {
-            var cur = get_key(tape, dp),
-            cur == none: set_key(tape, dp, 1),
-            cur != none: set_key(tape, dp, (cur + 1) % 256)
+            var cur = get_key(tape, str(dp)),
+            cur == none: set_key(tape, str(dp), 1),
+            cur != none: set_key(tape, str(dp), (cur + 1) % 256)
         },
         cmd == "-": {
-            var cur = get_key(tape, dp),
-            cur == none: set_key(tape, dp, 255),
-            cur != none: set_key(tape, dp, (cur - 1 + 256) % 256)
+            var cur = get_key(tape, str(dp)),
+            cur == none: set_key(tape, str(dp), 255),
+            cur != none: set_key(tape, str(dp), (cur - 1 + 256) % 256)
         },
         cmd == ".": {
-            var cell = get_key(tape, dp),
+            var cell = get_key(tape, str(dp)),
             cell == none: output = output + _chr(0),
             cell != none: output = output + _chr(cell)
         },
         cmd == "[": {
-            var cell = get_key(tape, dp),
-            cell == none: ip = get_key(jumps, ip),
-            cell == 0:    ip = get_key(jumps, ip)
+            var cell = get_key(tape, str(dp)),
+            cell == none: ip = num(get_key(jumps, str(ip))),
+            cell == 0:    ip = num(get_key(jumps, str(ip)))
         },
         cmd == "]": {
-            var cell = get_key(tape, dp),
-            cell != none and cell != 0: ip = get_key(jumps, ip)
+            var cell = get_key(tape, str(dp)),
+            cell != none and cell != 0: ip = num(get_key(jumps, str(ip)))
         },
 
         ip = ip + 1
