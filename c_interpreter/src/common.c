@@ -1,15 +1,20 @@
 #include "common.h"
-static jmp_buf g_repl_jmp;
-static int g_repl_active = 0;
-static char g_repl_errmsg[512];
+
+/* ── Source context ──────────────────────────────────────────────────────── */
+
+/* Set once per file/eval so error messages can print the offending line. */
 static const char *g_current_source_name = NULL;
 static const char *g_current_source_text = NULL;
+
 void how_set_source_context(const char *name, const char *text)
 {
     g_current_source_name = name;
     g_current_source_text = text;
 }
+
 const char *how_current_source_name(void) { return g_current_source_name; }
+
+/* Walk to the requested line and print it with a caret pointing at col. */
 void print_source_context(FILE *f, int line, int col)
 {
     if (!g_current_source_text || line <= 0)
@@ -33,14 +38,28 @@ void print_source_context(FILE *f, int line, int col)
     if (col > 0)
     {
         fprintf(f, "     | ");
+        /* preserve tabs so the caret lines up correctly */
         for (int i = 1; i < col; i++)
             fputc((line_start[i - 1] == '\t') ? '\t' : ' ', f);
         fprintf(f, "^\n");
     }
 }
-void how_repl_begin(void) { g_repl_active = 1; }
-void how_repl_end(void) { g_repl_active = 0; }
-int how_repl_is_active(void) { return g_repl_active; }
+
+/* ── REPL error recovery ─────────────────────────────────────────────────── */
+
+/* The REPL uses setjmp/longjmp so parse and runtime errors return to the
+   prompt instead of terminating the process. */
+static jmp_buf g_repl_jmp;
+static int     g_repl_active  = 0;
+static char    g_repl_errmsg[512];
+
+void        how_repl_begin(void)  { g_repl_active = 1; }
+void        how_repl_end(void)    { g_repl_active = 0; }
+int         how_repl_is_active(void) { return g_repl_active; }
+int         how_repl_setjmp(void) { return setjmp(g_repl_jmp); }
+void        how_repl_longjmp(void){ longjmp(g_repl_jmp, 1); }
+const char *how_repl_error(void)  { return g_repl_errmsg; }
+
 void how_repl_set_errorf(const char *fmt, ...)
 {
     va_list ap;
@@ -48,9 +67,10 @@ void how_repl_set_errorf(const char *fmt, ...)
     vsnprintf(g_repl_errmsg, sizeof(g_repl_errmsg), fmt, ap);
     va_end(ap);
 }
-const char *how_repl_error(void) { return g_repl_errmsg; }
-int how_repl_setjmp(void) { return setjmp(g_repl_jmp); }
-void how_repl_longjmp(void) { longjmp(g_repl_jmp, 1); }
+
+/* ── Fatal error helpers ─────────────────────────────────────────────────── */
+
+/* In REPL mode, errors longjmp back to the prompt instead of calling exit(). */
 void die(const char *fmt, ...)
 {
     va_list ap;
@@ -66,6 +86,8 @@ void die(const char *fmt, ...)
     fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);
     exit(1);
 }
+
+/* Like die(), but also prints the source location and the offending line. */
 void die_at(int line, int col, const char *fmt, ...)
 {
     va_list ap;
@@ -90,6 +112,9 @@ void die_at(int line, int col, const char *fmt, ...)
         print_source_context(stderr, line, col);
     exit(1);
 }
+
+/* ── Checked memory helpers ──────────────────────────────────────────────── */
+
 char *xstrdup(const char *s)
 {
     size_t len = strlen(s) + 1;
@@ -99,6 +124,7 @@ char *xstrdup(const char *s)
     memcpy(p, s, len);
     return p;
 }
+
 void *xmalloc(size_t n)
 {
     void *p = malloc(n);
@@ -106,6 +132,7 @@ void *xmalloc(size_t n)
         die("out of memory");
     return p;
 }
+
 void *xrealloc(void *p, size_t n)
 {
     void *q = realloc(p, n);
@@ -113,6 +140,9 @@ void *xrealloc(void *p, size_t n)
         die("out of memory");
     return q;
 }
+
+/* ── Dynamic string buffer ───────────────────────────────────────────────── */
+
 void buf_push(Buf *b, char c)
 {
     if (b->len + 1 >= b->cap)
@@ -121,13 +151,17 @@ void buf_push(Buf *b, char c)
         b->buf = xrealloc(b->buf, b->cap);
     }
     b->buf[b->len++] = c;
-    b->buf[b->len] = '\0';
+    b->buf[b->len] = '\0';  /* keep NUL-terminated at all times */
 }
+
 void buf_append(Buf *b, const char *s)
 {
     while (*s)
         buf_push(b, *s++);
 }
+
+/* Finalise the buffer: returns the heap string and resets Buf to zero.
+   Caller owns the returned string. */
 char *buf_done(Buf *b)
 {
     char *r = b->buf ? b->buf : xstrdup("");
