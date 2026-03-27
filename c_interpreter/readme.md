@@ -1,113 +1,68 @@
-# howlang Refactor Build Instructions
-
-This project has been split into three main parts:
-
-- `frontend/` — lexer, AST helpers, parser
-- `runtime/` — values, environment, GC, builtins, evaluator
-- `driver/` — CLI entrypoint and REPL
-
-It uses **CMake** as the build system.
+# howlang C interpreter — build instructions
 
 ## Prerequisites
 
-You need:
-
-- a C compiler
-  - macOS: `clang` is usually available through Xcode Command Line Tools
-  - Linux: `gcc` or `clang`
-- **CMake** 3.16 or newer
-- **Make** or another generator supported by CMake
+- A C compiler (macOS: `clang` via Xcode Command Line Tools; Linux: `gcc` or `clang`)
+- CMake 3.16 or newer
 
 ### macOS setup
 
-If needed, install Xcode Command Line Tools:
-
 ```bash
-xcode-select --install
-```
-
-Install CMake with Homebrew if you do not already have it:
-
-```bash
-brew install cmake
+xcode-select --install   # Xcode Command Line Tools (if needed)
+brew install cmake        # CMake (if needed)
 ```
 
 ## Build
 
-From the project root:
+From this directory (`c_interpreter/`):
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build .
+cmake -S . -B build
+cmake --build build
 ```
 
-This should produce the executable:
+The executable is at `build/howlang`.
+
+## Build types
 
 ```bash
-./howlang
-```
-
-## Run
-
-To start the REPL:
-
-```bash
-./howlang
-```
-
-To run a source file:
-
-```bash
-./howlang path/to/program.how
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug   && cmake --build build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
 ```
 
 ## Clean rebuild
 
-If you want to rebuild from scratch:
-
 ```bash
 rm -rf build
-mkdir build
-cd build
-cmake ..
-cmake --build .
+cmake -S . -B build
+cmake --build build
 ```
 
-## Build type
+## Project layout
 
-For a debug build:
-
-```bash
-mkdir -p build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-cmake --build .
+```
+c_interpreter/
+  CMakeLists.txt
+  include/
+    common.h            # Shared utilities: buffers, memory, error reporting, REPL state
+    ast.h               # AST node types and structures
+    frontend.h          # Public parser API
+    runtime.h           # Public runtime API
+    lexer_internal.h    # Token types shared between lexer and parser (internal)
+  src/
+    common.c            # Implementations of common utilities
+    lexer.c             # Tokeniser
+    parser.c            # Parser and AST construction
+    frontend.c          # AST list helpers (nl_push, sl_push, make_node, …)
+    runtime.c           # Evaluator, environment, builtins, GC
+    driver.c            # CLI entry point and REPL
+  build/                # CMake output (gitignored)
 ```
 
-For a release build:
+## Build outputs
 
-```bash
-mkdir -p build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-cmake --build .
-```
-
-## Project outputs
-
-The CMake setup is intended to build:
-
-- `howlang_frontend` — frontend library
-- `howlang_runtime` — runtime library
-- `howlang` — interpreter executable
-
-Depending on your platform and generator, the libraries may appear as static libraries such as:
-
-- `libhowlang_frontend.a`
-- `libhowlang_runtime.a`
-
-## Suggested next step
-
-A good next refactor is to move remaining interpreter-wide runtime state into an explicit runtime context struct, so the frontend can be reused more cleanly by a future compiler.
+| Artifact                  | Description              |
+|---------------------------|--------------------------|
+| `build/howlang`           | Interpreter executable   |
+| `build/libhowlang_frontend.a` | Parser static library |
+| `build/libhowlang_runtime.a`  | Runtime static library |

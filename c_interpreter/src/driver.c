@@ -1,4 +1,4 @@
-#include "howlang_runtime.h"
+#include "runtime.h"
 #include <termios.h>
 
 /* ── REPL line editor with history (no readline dependency) ─────────────── */

@@ -9,17 +9,19 @@ self-hosting meta-interpreter written in Howlang itself (`how_interpreter/`).
 ## Quick Start
 
 ```bash
-# Build
-cc -O2 -o howlang howlang.c -lm
+# Build (requires CMake 3.16+ and a C compiler)
+cd c_interpreter
+cmake -S . -B build
+cmake --build build
 
 # Run a file
-./howlang program.how
+./build/howlang program.how
 
 # Interactive REPL
-./howlang
+./build/howlang
 
 # Meta-interpreter REPL (Howlang interpreting Howlang)
-./howlang how_interpreter/how_meta.how
+./build/howlang samples/how_interpreter/how_meta.how
 ```
 
 ---
@@ -491,20 +493,35 @@ Hint: this usually means a missing ')' earlier, or a trailing comma.
 
 ```
 howlang/
-  howlang.c             # Single-file C interpreter — build with: cc -O2 -o howlang howlang.c -lm
-  how_interpreter/
-    how_meta.how        # Meta-interpreter entry point
-    how_lexer.how       # Lexer written in Howlang
-    how_parser.how      # Parser written in Howlang
-    how_eval.how        # Evaluator written in Howlang
+  c_interpreter/              # C interpreter (CMake project)
+    CMakeLists.txt
+    include/
+      common.h                # Shared utilities: buffers, memory, error reporting, REPL state
+      ast.h                   # AST node types and structures
+      frontend.h              # Public parser API
+      runtime.h               # Public runtime API
+      lexer_internal.h        # Token types shared between lexer and parser (internal)
+    src/
+      common.c                # Implementations of common utilities
+      lexer.c                 # Tokeniser
+      parser.c                # Parser and AST construction
+      frontend.c              # AST list helpers (nl_push, sl_push, make_node, …)
+      runtime.c               # Evaluator, environment, builtins, GC
+      driver.c                # CLI entry point and REPL
+    build/                    # CMake build output (gitignored)
   samples/
-    test_all.how        # 54-test suite (direct interpreter)
-    lru_cache.how       # LRU cache module
-    lru_cache_test.how  # 34-test suite for LRU cache
-    graph.how           # Graph + Dijkstra module
-    graph_test.how      # 32-test suite for graph
-    test_loops.how      # 41-test suite for loop semantics (loop-as-statement, :: exit)
-    try_catch_test.how  # 28-test suite for !! and catch error handling
+    how_interpreter/
+      how_meta.how            # Meta-interpreter entry point
+      how_lexer.how           # Lexer written in Howlang
+      how_parser.how          # Parser written in Howlang
+      how_eval.how            # Evaluator written in Howlang
+    test_all.how              # Main test suite
+    lru_cache.how             # LRU cache module
+    lru_cache_test.how        # LRU cache tests
+    graph.how                 # Graph + Dijkstra module
+    graph_test.how            # Graph tests
+    test_loops.how            # Loop semantics tests
+    try_catch_test.how        # Error handling tests
 ```
 
 ---
@@ -512,22 +529,26 @@ howlang/
 ## Running the Tests
 
 ```bash
-./howlang samples/test_all.how
+cd c_interpreter
+cmake -S . -B build && cmake --build build
+HOW=./build/howlang
+
+$HOW ../samples/test_all.how
 # FINAL: 54/54 passed
 
-./howlang how_interpreter/how_meta.how samples/test_all.how
+$HOW ../samples/how_interpreter/how_meta.how ../samples/test_all.how
 # FINAL: 54/54 passed  (same suite via the meta-interpreter)
 
-cd samples
-../howlang lru_cache_test.how
+cd ../samples
+../c_interpreter/build/howlang lru_cache_test.how
 # 34 passed   0 failed
 
-../howlang graph_test.how
+../c_interpreter/build/howlang graph_test.how
 # 32 passed   0 failed
 
-../howlang test_loops.how
+../c_interpreter/build/howlang test_loops.how
 # 41 passed   0 failed
 
-../howlang try_catch_test.how
+../c_interpreter/build/howlang try_catch_test.how
 # 28 passed   0 failed
 ```

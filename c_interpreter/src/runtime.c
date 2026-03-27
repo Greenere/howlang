@@ -1,5 +1,5 @@
-#include "howlang_runtime.h"
-#include "howlang_frontend.h"
+#include "runtime.h"
+#include "frontend.h"
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Runtime values                                                              */

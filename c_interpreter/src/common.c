@@ -1,4 +1,4 @@
-#include "howlang_common.h"
+#include "common.h"
 static jmp_buf g_repl_jmp;
 static int g_repl_active = 0;
 static char g_repl_errmsg[512];
