@@ -1,0 +1,10 @@
+# Expected hint target:
+#   ':' vs '::'
+# Here ':' is used where a yielding branch likely intended '::'.
+
+var abs_val = (x){
+    x >= 0 : x,
+    :: -x
+}
+
+print(abs_val(3))

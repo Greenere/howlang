@@ -1,0 +1,5 @@
+# Expected hint target:
+#   ':' cannot appear here / maybe use '::' only inside branch body
+
+var x = 1 :
+print(x)

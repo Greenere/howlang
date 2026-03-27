@@ -1,0 +1,6 @@
+# Expected hint target:
+#   malformed loop / maybe missing ')'
+
+(:){
+    :: 1
+(

@@ -1,0 +1,8 @@
+# Expected hint target:
+#   missing '}'
+
+var choose = (x){
+    x > 0 :: x,
+    :: -x
+
+print(choose(3))

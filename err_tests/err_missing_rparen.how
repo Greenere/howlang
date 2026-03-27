@@ -1,0 +1,7 @@
+# Expected hint target:
+#   missing ')'
+# The parser should complain near the comma / '{' boundary.
+
+var add = (a, b{
+    :: a + b
+}
