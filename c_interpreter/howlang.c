@@ -24,15 +24,7 @@
 /* REPL error recovery: when in REPL mode, errors jump back instead of exit() */
 static jmp_buf  g_repl_jmp;
 static int       g_repl_active = 0;
-static char      g_repl_errmsg[1024];
-
-static const char *g_current_source_name = NULL;
-static const char *g_current_source_text = NULL;
-
-static void set_source_context(const char *name, const char *text) {
-    g_current_source_name = name;
-    g_current_source_text = text;
-}
+static char      g_repl_errmsg[512];
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Forward declarations                                                        */
@@ -47,18 +39,133 @@ typedef struct NodeList NodeList;
 /*  Utilities                                                                   */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
+/* ── Source context for error messages ─────────────────────────────────────── */
+static const char *g_current_source_name = NULL;
+static const char *g_current_source_text = NULL;
 
-static const char *token_type_name(int t);
-static void format_token_desc(char *buf, size_t n, int t, const char *lexeme);
-static const char *parse_hint_for_token(int expected, int got);
-static void print_source_context(FILE *f, int line, int col);
-static void vreport_error_and_exit(const char *kind, int line, int col, const char *hint, const char *fmt, va_list ap);
-static void report_error_and_exit(const char *kind, int line, int col, const char *hint, const char *fmt, ...);
+static void set_source_context(const char *name, const char *text) {
+    g_current_source_name = name;
+    g_current_source_text = text;
+}
+
+/* Print the source line + caret for a given line/col */
+static void print_source_context(FILE *f, int line, int col) {
+    if (!g_current_source_text || line <= 0) return;
+    const char *src = g_current_source_text;
+    const char *cur = src;
+    int cur_line = 1;
+    while (*cur && cur_line < line) {
+        if (*cur == '\n') cur_line++;
+        cur++;
+    }
+    if (cur_line != line) return;
+    const char *line_start = cur;
+    while (*cur && *cur != '\n') cur++;
+    fprintf(f, "%4d | ", line);
+    fwrite(line_start, 1, (size_t)(cur - line_start), f);
+    fputc('\n', f);
+    if (col > 0) {
+        fprintf(f, "     | ");
+        for (int i = 1; i < col; i++)
+            fputc((line_start[i-1] == '\t') ? '\t' : ' ', f);
+        fprintf(f, "^\n");
+    }
+}
+
+/* Token type → readable name */
+static const char *token_type_name(int t) {
+    switch (t) {
+        case 0:  return "EOF";
+        case 1:  return "NUMBER";
+        case 2:  return "STRING";
+        case 3:  return "BOOL";
+        case 4:  return "NONE";
+        case 5:  return "identifier";
+        case 6:  return "'var'";
+        case 7:  return "'break'";
+        case 8:  return "'continue'";
+        case 9:  return "'how'";
+        case 10: return "'where'";
+        case 11: return "'as'";
+        case 12: return "'('";
+        case 13: return "')'";
+        case 14: return "'{'";
+        case 15: return "'}'";
+        case 16: return "'['";
+        case 17: return "']'";
+        case 18: return "','";
+        case 19: return "'.'";
+        case 20: return "':'";
+        case 21: return "'::'";
+        case 22: return "'+'";
+        case 23: return "'-'";
+        case 24: return "'*'";
+        case 25: return "'/'";
+        case 26: return "'%'";
+        case 27: return "'='";
+        case 28: return "'+='";
+        case 29: return "'-='";
+        case 30: return "'*='";
+        case 31: return "'/='";
+        case 32: return "'=='";
+        case 33: return "'!='";
+        case 34: return "'<'";
+        case 35: return "'>'";
+        case 36: return "'<='";
+        case 37: return "'>='";
+        case 38: return "'and'";
+        case 39: return "'or'";
+        case 40: return "'not'";
+        default: return "<unknown>";
+    }
+}
+
+/* Hint for common parse errors */
+static const char *parse_hint_for_token(int expected, int got) {
+    if (expected == 13 && got == 18)  /* RPAREN, COMMA */
+        return "Hint: missing ')' earlier, or a trailing comma before expected expression.";
+    if (expected == 15)               /* RBRACE */
+        return "Hint: missing closing '}' for a block or map literal.";
+    if (expected == 17)               /* RBRACKET */
+        return "Hint: missing closing ']' for a bracket-call or class parameter list.";
+    if (got == 20)                    /* COLON */
+        return "Hint: ':' is a side-effect branch; use '::' to return a value.";
+    if (got == 21)                    /* DCOLON */
+        return "Hint: '::' is only valid inside function and loop bodies.";
+    if (got == 27)                    /* EQ */
+        return "Hint: did you mean '==' for comparison?";
+    return NULL;
+}
 
 static void die(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
-    vreport_error_and_exit("RuntimeError", 0, 0, NULL, fmt, ap);
+    char msg[1024];
+    vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    if (g_repl_active) {
+        snprintf(g_repl_errmsg, sizeof(g_repl_errmsg), "%s", msg);
+        longjmp(g_repl_jmp, 1);
+    }
+    fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);
+    exit(1);
+}
+
+/* die with line+col — shows source context */
+static void die_at(int line, int col, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    char msg[1024];
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    if (g_repl_active) {
+        snprintf(g_repl_errmsg, sizeof(g_repl_errmsg), "%s", msg);
+        longjmp(g_repl_jmp, 1);
+    }
+    fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);
+    if (g_current_source_name && line > 0)
+        fprintf(stderr, "  --> %s:%d%s\n", g_current_source_name, line,
+                col > 0 ? "" : "");
+    if (line > 0) print_source_context(stderr, line, col);
+    exit(1);
 }
 
 static char *xstrdup(const char *s) {
@@ -127,7 +234,7 @@ typedef struct {
     double nval;  /* numeric value */
     int    bval;  /* bool value */
     int    line;
-    int    col;
+    int    col;   /* column number (1-based) */
     int    raw;   /* 1 = single-quoted string (no interpolation) */
 } Token;
 
@@ -141,120 +248,11 @@ static void tl_push(TokenList *tl, Token t) {
     tl->toks[tl->len++] = t;
 }
 
-static const char *token_type_name(int t) {
-    switch (t) {
-        case TT_EOF: return "EOF";
-        case TT_NUMBER: return "NUMBER";
-        case TT_STRING: return "STRING";
-        case TT_BOOL: return "BOOL";
-        case TT_NONE: return "NONE";
-        case TT_IDENT: return "IDENT";
-        case TT_VAR: return "VAR";
-        case TT_BREAK: return "BREAK";
-        case TT_CONTINUE: return "CONTINUE";
-        case TT_HOW: return "HOW";
-        case TT_WHERE: return "WHERE";
-        case TT_AS: return "AS";
-        case TT_LPAREN: return "LPAREN";
-        case TT_RPAREN: return "RPAREN";
-        case TT_LBRACE: return "LBRACE";
-        case TT_RBRACE: return "RBRACE";
-        case TT_LBRACKET: return "LBRACKET";
-        case TT_RBRACKET: return "RBRACKET";
-        case TT_COMMA: return "COMMA";
-        case TT_DOT: return "DOT";
-        case TT_COLON: return "COLON";
-        case TT_DCOLON: return "DCOLON";
-        case TT_PLUS: return "PLUS";
-        case TT_MINUS: return "MINUS";
-        case TT_STAR: return "STAR";
-        case TT_SLASH: return "SLASH";
-        case TT_PERCENT: return "PERCENT";
-        case TT_EQ: return "EQ";
-        case TT_PLUSEQ: return "PLUSEQ";
-        case TT_MINUSEQ: return "MINUSEQ";
-        case TT_STAREQ: return "STAREQ";
-        case TT_SLASHEQ: return "SLASHEQ";
-        case TT_EQEQ: return "EQEQ";
-        case TT_NEQ: return "NEQ";
-        case TT_LT: return "LT";
-        case TT_GT: return "GT";
-        case TT_LTE: return "LTE";
-        case TT_GTE: return "GTE";
-        case TT_AND: return "AND";
-        case TT_OR: return "OR";
-        case TT_NOT: return "NOT";
-        default: return "<unknown-token>";
-    }
-}
-
-static void format_token_desc(char *buf, size_t n, int t, const char *lexeme) {
-    if (lexeme && lexeme[0]) snprintf(buf, n, "%s ('%s')", token_type_name(t), lexeme);
-    else snprintf(buf, n, "%s", token_type_name(t));
-}
-
-static const char *parse_hint_for_token(int expected, int got) {
-    if (expected == TT_RPAREN && got == TT_COMMA)
-        return "Hint: this usually means a missing ')' earlier, or a trailing comma where an expression was expected.";
-    if (expected == TT_RBRACE)
-        return "Hint: you may be missing a closing '}' for a block, function body, or map/list literal.";
-    if (expected == TT_RBRACKET)
-        return "Hint: you may be missing a closing ']' for a bracket-call or class parameter list.";
-    if (got == TT_COLON)
-        return "Hint: ':' starts a side-effect branch, while '::' yields a value immediately.";
-    if (got == TT_DCOLON)
-        return "Hint: '::' is only valid inside function and loop bodies.";
-    return NULL;
-}
-
-static void print_source_context(FILE *f, int line, int col) {
-    if (!g_current_source_text || line <= 0 || col <= 0) return;
-    const char *src = g_current_source_text;
-    const char *cur = src;
-    int current_line = 1;
-    while (*cur && current_line < line) {
-        if (*cur == '\n') current_line++;
-        cur++;
-    }
-    if (current_line != line) return;
-    const char *line_start = cur;
-    while (*cur && *cur != '\n') cur++;
-    const char *line_end = cur;
-    fprintf(f, "%4d | ", line);
-    fwrite(line_start, 1, (size_t)(line_end - line_start), f);
-    fputc('\n', f);
-    fprintf(f, "     | ");
-    for (int i = 1; i < col; i++) fputc((line_start[i-1] == '\t') ? '\t' : ' ', f);
-    fprintf(f, "^\n");
-}
-
-static void vreport_error_and_exit(const char *kind, int line, int col, const char *hint, const char *fmt, va_list ap) {
-    char msg[1024];
-    vsnprintf(msg, sizeof(msg), fmt, ap);
-    if (g_repl_active) {
-        snprintf(g_repl_errmsg, sizeof(g_repl_errmsg), "%s: %s%s%s", kind, msg,
-                 hint ? "\n" : "", hint ? hint : "");
-        longjmp(g_repl_jmp, 1);
-    }
-    fprintf(stderr, "\033[31m[%s]\033[0m %s\n", kind, msg);
-    if (g_current_source_name && line > 0 && col > 0)
-        fprintf(stderr, "  --> %s:%d:%d\n", g_current_source_name, line, col);
-    if (line > 0 && col > 0) print_source_context(stderr, line, col);
-    if (hint) fprintf(stderr, "%s\n", hint);
-    exit(1);
-}
-
-static void report_error_and_exit(const char *kind, int line, int col, const char *hint, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vreport_error_and_exit(kind, line, col, hint, fmt, ap);
-    va_end(ap);
-}
-
 static TokenList *lex(const char *src) {
     TokenList *tl = xmalloc(sizeof(*tl));
     tl->toks = NULL; tl->len = tl->cap = 0;
-    int pos = 0, line = 1, line_start = 0;
+    int pos = 0, line = 1;
+    int line_start = 0;   /* byte offset of line start, for col tracking */
     int n = strlen(src);
 
     while (pos < n) {
@@ -285,7 +283,7 @@ static TokenList *lex(const char *src) {
                 while (pos < n && isdigit(src[pos])) pos++;
             }
             char tmp[64]; int len = pos - start;
-            if (len >= 63) report_error_and_exit("LexError", line, pos - line_start + 1, NULL, "number literal is too long");
+            if (len >= 63) die_at(line, 0, "number literal too long");
             memcpy(tmp, src+start, len); tmp[len] = 0;
             t.type = TT_NUMBER; t.nval = atof(tmp);
             tl_push(tl, t); continue;
@@ -309,7 +307,7 @@ static TokenList *lex(const char *src) {
                         default:   buf_push(&b,e);    break;
                     }
                 } else {
-                    if (src[pos] == '\n') { line++; line_start = pos + 1; }
+                    if (src[pos] == '\n') line++;
                     buf_push(&b, src[pos++]);
                 }
             }
@@ -324,7 +322,7 @@ static TokenList *lex(const char *src) {
             while (pos < n && (isalnum(src[pos]) || src[pos] == '_')) pos++;
             int len = pos - start;
             char tmp[256];
-            if (len >= 255) report_error_and_exit("LexError", line, pos - line_start + 1, NULL, "identifier is too long");
+            if (len >= 255) die_at(line, 0, "identifier too long");
             memcpy(tmp, src+start, len); tmp[len] = 0;
             if      (!strcmp(tmp,"var"))   { t.type = TT_VAR; }
             else if (!strcmp(tmp,"true"))  { t.type = TT_BOOL; t.bval = 1; }
@@ -360,7 +358,7 @@ static TokenList *lex(const char *src) {
                 pos++;
                 t.type = TT_AND;
             } else {
-                report_error_and_exit("LexError", line, t.col, "Hint: use '&&' for logical and.", "unexpected character '&'");
+                die_at(line, pos - line_start + 1, "unexpected '&' — use '&&' for logical and");
             }
             break;
         case '|':
@@ -368,7 +366,7 @@ static TokenList *lex(const char *src) {
                 pos++;
                 t.type = TT_OR;
             } else {
-                report_error_and_exit("LexError", line, t.col, "Hint: use '||' for logical or.", "unexpected character '|'");
+                die_at(line, pos - line_start + 1, "unexpected '|' — use '||' for logical or");
             }
             break;
         case '%': t.type=TT_PERCENT;  break;
@@ -380,7 +378,7 @@ static TokenList *lex(const char *src) {
         case ']': t.type=TT_RBRACKET; break;
         case ',': t.type=TT_COMMA;    break;
         case '.': t.type=TT_DOT;      break;
-        default: report_error_and_exit("LexError", line, t.col, NULL, "unexpected character '%c'", c);
+        default: die_at(line, pos - line_start, "unexpected character '%c'", c);
         }
 #undef TWO
         tl_push(tl, t);
@@ -398,7 +396,7 @@ typedef enum {
     N_NUM, N_STR, N_BOOL, N_NONE,
     N_IDENT, N_BINOP, N_UNARY, N_ASSIGN,
     N_DOT, N_CALL, N_SLICE,
-    N_FUNC, N_CLASS,
+    N_FUNC, N_FORLOOP, N_CLASS,
     N_MAP_LIT,      /* map or list literal */
     N_BLOCK,
     N_BRANCH,
@@ -422,7 +420,6 @@ static void nl_push(NodeList *nl, Node *n) {
 
 /* string list */
 typedef struct { char **s; int len; int cap; } StrList;
-typedef enum { LOOP_NONE, LOOP_UNBOUNDED, LOOP_FORRANGE } LoopKind;
 static void sl_push(StrList *sl, char *s) {
     if (sl->len + 1 >= sl->cap) {
         sl->cap = sl->cap ? sl->cap*2 : 4;
@@ -489,12 +486,15 @@ struct Node {
         struct { /* N_FUNC, N_CLASS */
             StrList  params;
             NodeList branches;  /* list of N_BRANCH nodes */
-            LoopKind loop_kind; /* N_FUNC only */
-            char    *iter_var;  /* LOOP_FORRANGE only */
-            Node    *loop_start;/* may be NULL */
-            Node    *loop_stop; /* LOOP_FORRANGE only */
+            int      is_loop;   /* N_FUNC only */
         } func;
 
+        struct { /* N_FORLOOP */
+            char    *iter_var;
+            Node    *start;     /* may be NULL */
+            Node    *stop;
+            NodeList branches;
+        } forloop;
 
         struct { /* N_MAP_LIT */
             MapItemList items;  /* key=NULL means list */
@@ -552,11 +552,24 @@ static int p_check(Parser *p, TT t) { return p_peek(p,0)->type == t; }
 static Token *p_expect(Parser *p, TT t, const char *msg) {
     if (!p_check(p,t)) {
         Token *cur = p_peek(p,0);
-        char got[128];
-        format_token_desc(got, sizeof(got), cur->type, cur->sval);
-        report_error_and_exit("ParseError", cur->line, cur->col, parse_hint_for_token(t, cur->type),
-                              "%s; expected %s but got %s [token type %d]",
-                              msg, token_type_name(t), got, cur->type);
+        const char *hint = parse_hint_for_token((int)t, (int)cur->type);
+        /* print parse error with source context */
+        char errmsg[512];
+        snprintf(errmsg, sizeof(errmsg), "%s; expected %s but got %s",
+                 msg, token_type_name((int)t), token_type_name((int)cur->type));
+        if (g_repl_active) {
+            if (hint)
+                snprintf(g_repl_errmsg, sizeof(g_repl_errmsg), "ParseError: %s\n%s", errmsg, hint);
+            else
+                snprintf(g_repl_errmsg, sizeof(g_repl_errmsg), "ParseError: %s", errmsg);
+            longjmp(g_repl_jmp, 1);
+        }
+        fprintf(stderr, "\033[31m[ParseError]\033[0m %s\n", errmsg);
+        if (g_current_source_name && cur->line > 0)
+            fprintf(stderr, "  --> %s:%d:%d\n", g_current_source_name, cur->line, cur->col);
+        if (cur->line > 0) print_source_context(stderr, cur->line, cur->col);
+        if (hint) fprintf(stderr, "%s\n", hint);
+        exit(1);
     }
     return p_adv(p);
 }
@@ -724,13 +737,18 @@ static Node *parse_branch(Parser *p) {
        (i=0:n){ body }  and  (:)={ body }  followed by  :: x  would otherwise
        be misread as "if loop-result-truthy :: return x". Wrap immediately.
        Detection:
-         - N_CALL where callee is N_FUNC with loop_kind != LOOP_NONE */
+         - N_FORLOOP: always a statement
+         - N_CALL where callee is N_FUNC with is_loop=1 (the (:)={} pattern) */
     {
         int is_loop_stmt = 0;
-        if (cond->type == N_CALL &&
+        if (cond->type == N_CALL && cond->call.callee &&
+                   cond->call.callee->type == N_FORLOOP) {
+            /* (i=0:n){ }() — explicit for-range call is a loop statement */
+            is_loop_stmt = 1;
+        } else if (cond->type == N_CALL &&
                    cond->call.callee &&
                    cond->call.callee->type == N_FUNC &&
-                   cond->call.callee->func.loop_kind != LOOP_NONE) {
+                   cond->call.callee->func.is_loop) {
             is_loop_stmt = 1;
         }
         if (is_loop_stmt) {
@@ -957,7 +975,7 @@ static Node *parse_call(Parser *p) {
     int last_line = line;
     /* if it's a func/class literal, set last_line to the line of the
        closing brace (p->pos-1), NOT the next token (p->pos) */
-    if (n->type == N_FUNC || n->type == N_CLASS) {
+    if (n->type == N_FUNC || n->type == N_CLASS || n->type == N_FORLOOP) {
         int prev = p->pos - 1;
         if (prev >= 0 && prev < p->tl->len)
             last_line = p->tl->toks[prev].line;
@@ -969,9 +987,7 @@ static Node *parse_call(Parser *p) {
         int cur_line = p_peek(p,0)->line;
         /* For-range: (i=0:n){ }() — () always triggers a call regardless of line.
            No ambiguity: a for-range value can only be invoked with (). */
-        int force_call = (n->type == N_FUNC &&
-                          n->func.loop_kind == LOOP_FORRANGE &&
-                          p_check(p,TT_LPAREN));
+        int force_call = (n->type == N_FORLOOP && p_check(p,TT_LPAREN));
         /* ( args ) — function call or slice, same line */
         if (p_check(p,TT_LPAREN) && (force_call || cur_line == last_line)) {
             p_adv(p);
@@ -1343,7 +1359,7 @@ static Node *parse_atom(Parser *p) {
             p_adv(p); /* ) */
             int auto_call = p_match(p,TT_EQ) != NULL;
             Node *fn = make_node(N_FUNC,line);
-            fn->func.loop_kind = LOOP_UNBOUNDED;
+            fn->func.is_loop = 1;
             parse_func_body(p,&fn->func.branches);
             if (auto_call) {
                 /* wrap in Call(fn, []) */
@@ -1391,12 +1407,11 @@ static Node *parse_atom(Parser *p) {
                 p_expect(p,TT_COLON,"expected ':'");
                 Node *stop  = parse_expr(p);
                 p_expect(p,TT_RPAREN,"expected ')'");
-                Node *n = make_node(N_FUNC,line);
-                n->func.loop_kind = LOOP_FORRANGE;
-                n->func.iter_var   = ivar;
-                n->func.loop_start = start;
-                n->func.loop_stop  = stop;
-                parse_func_body(p,&n->func.branches);
+                Node *n = make_node(N_FORLOOP,line);
+                n->forloop.iter_var = ivar;
+                n->forloop.start    = start;
+                n->forloop.stop     = stop;
+                parse_func_body(p,&n->forloop.branches);
                 return n;
             }
         }
@@ -1449,10 +1464,19 @@ static Node *parse_atom(Parser *p) {
 
     {
         Token *cur = p_peek(p,0);
-        char got[128];
-        format_token_desc(got, sizeof(got), cur->type, cur->sval);
-        report_error_and_exit("ParseError", cur->line, cur->col, parse_hint_for_token(-1, cur->type),
-                              "unexpected token %s [token type %d]", got, cur->type);
+        const char *hint = parse_hint_for_token(-1, (int)cur->type);
+        if (g_repl_active) {
+            snprintf(g_repl_errmsg, sizeof(g_repl_errmsg),
+                     "ParseError: unexpected token %s", token_type_name((int)cur->type));
+            longjmp(g_repl_jmp, 1);
+        }
+        fprintf(stderr, "\033[31m[ParseError]\033[0m unexpected token %s\n",
+                token_type_name((int)cur->type));
+        if (g_current_source_name && cur->line > 0)
+            fprintf(stderr, "  --> %s:%d:%d\n", g_current_source_name, cur->line, cur->col);
+        if (cur->line > 0) print_source_context(stderr, cur->line, cur->col);
+        if (hint) fprintf(stderr, "%s\n", hint);
+        exit(1);
     }
     return NULL;
 }
@@ -1500,10 +1524,12 @@ struct HowFunc {
     StrList  params;
     NodeList branches;
     Env     *closure;
-    LoopKind loop_kind;
+    int      is_loop;
+    /* for-range callable fields */
+    int      is_forrange;
     char    *iter_var;
-    Node    *loop_start;
-    Node    *loop_stop;
+    Node    *fr_start;
+    Node    *fr_stop;
     int      refcount;
     int      gc_mark;
     struct HowFunc *gc_next;
@@ -2042,9 +2068,8 @@ static Env *g_globals;
 static Value *eval(Node *node, Env *env, Signal *sig);
 static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line);
 static void run_branches(NodeList *branches, Env *env, Signal *sig);
-static void exec_loop_iteration(NodeList *branches, Env *env, Signal *sig);
 static void run_loop(HowFunc *fn, Signal *sig);
-static Value *run_for_loop(HowFunc *fn, Signal *sig);
+static Value *run_for_loop(Node *node, Env *env, Signal *sig);
 static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig);
 static void exec_stmt(Node *node, Env *env, Signal *sig);
 static void exec_import(const char *modname, const char *alias, Env *env);
@@ -2784,23 +2809,23 @@ static Value *apply_augop(Value *old, Value *val, const char *op, int line) {
             for (int i=0;i<val->list->len;i++) list_push(nl,val->list->items[i]);
             Value *r = val_list(nl); list_decref(nl); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return r;
         }
-        if (old->type!=VT_NUM||val->type!=VT_NUM) die("+= requires numbers or strings (line %d)",line);
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die_at(line, 0, "+= requires numbers or strings");
         Value *ret = val_num(old->nval + val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     if (!strcmp(op,"-=")) {
-        if (old->type!=VT_NUM||val->type!=VT_NUM) die("-= requires numbers (line %d)",line);
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die_at(line, 0, "-= requires numbers");
         Value *ret = val_num(old->nval - val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     if (!strcmp(op,"*=")) {
-        if (old->type!=VT_NUM||val->type!=VT_NUM) die("*= requires numbers (line %d)",line);
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die_at(line, 0, "*= requires numbers");
         Value *ret = val_num(old->nval * val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     if (!strcmp(op,"/=")) {
-        if (old->type!=VT_NUM||val->type!=VT_NUM) die("/= requires numbers (line %d)",line);
-        if (val->nval==0) die("division by zero (line %d)",line);
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die_at(line, 0, "/= requires numbers");
+        if (val->nval==0) die_at(line, 0, "division by zero");
         Value *ret = val_num(old->nval / val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
-    die("unknown augop %s (line %d)",op,line);
+    die_at(line, 0, "unknown augop %s", op);
     GC_UNROOT_VALUE();
     GC_UNROOT_VALUE();
     return val_none();
@@ -2824,7 +2849,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
 
     case N_IDENT: {
         Value *v = env_get(env, node->sval);
-        if (!v) die("undefined variable '%s' (line %d)", node->sval, node->line);
+        if (!v) die_at(node->line, 0, "undefined variable '%s'", node->sval);
         return val_incref(v);
     }
 
@@ -2861,21 +2886,21 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 Buf buf={0}; buf_append(&buf,a); buf_append(&buf,b);
                 free(a); free(b); res=val_str_own(buf_done(&buf));
             } else {
-                if(l->type!=VT_NUM||r->type!=VT_NUM) die("'+' requires numbers (line %d)",node->line);
+                if(l->type!=VT_NUM||r->type!=VT_NUM) die_at(node->line, 0, "'+' requires numbers");
                 res=val_num(l->nval+r->nval);
             }
         } else if (!strcmp(op,"-")) {
-            if(l->type!=VT_NUM||r->type!=VT_NUM) die("'-' requires numbers (line %d)",node->line);
+            if(l->type!=VT_NUM||r->type!=VT_NUM) die_at(node->line, 0, "'-' requires numbers");
             res=val_num(l->nval-r->nval);
         } else if (!strcmp(op,"*")) {
-            if(l->type!=VT_NUM||r->type!=VT_NUM) die("'*' requires numbers (line %d)",node->line);
+            if(l->type!=VT_NUM||r->type!=VT_NUM) die_at(node->line, 0, "'*' requires numbers");
             res=val_num(l->nval*r->nval);
         } else if (!strcmp(op,"/")) {
-            if(l->type!=VT_NUM||r->type!=VT_NUM) die("'/' requires numbers (line %d)",node->line);
-            if(r->nval==0) die("division by zero (line %d)",node->line);
+            if(l->type!=VT_NUM||r->type!=VT_NUM) die_at(node->line, 0, "'/' requires numbers");
+            if(r->nval==0) die_at(node->line, 0, "division by zero");
             res=val_num(l->nval/r->nval);
         } else if (!strcmp(op,"%")) {
-            if(l->type!=VT_NUM||r->type!=VT_NUM) die("'%%' requires numbers (line %d)",node->line);
+            if(l->type!=VT_NUM||r->type!=VT_NUM) die_at(node->line, 0, "'%%' requires numbers");
             res=val_num(fmod(l->nval,r->nval));
         } else if (!strcmp(op,"==")) {
             res=val_bool(how_eq(l,r));
@@ -2884,25 +2909,25 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         } else if (!strcmp(op,"<")) {
             if(l->type!=VT_NUM||r->type!=VT_NUM) {
                 if(l->type==VT_STR&&r->type==VT_STR){res=val_bool(strcmp(l->sval,r->sval)<0);}
-                else die("'<' requires numbers (line %d)",node->line);
+                else die_at(node->line, 0, "'<' requires numbers");
             } else res=val_bool(l->nval<r->nval);
         } else if (!strcmp(op,">")) {
             if(l->type!=VT_NUM||r->type!=VT_NUM) {
                 if(l->type==VT_STR&&r->type==VT_STR){res=val_bool(strcmp(l->sval,r->sval)>0);}
-                else die("'>' requires numbers (line %d)",node->line);
+                else die_at(node->line, 0, "'>' requires numbers");
             } else res=val_bool(l->nval>r->nval);
         } else if (!strcmp(op,"<=")) {
             if(l->type!=VT_NUM||r->type!=VT_NUM) {
                 if(l->type==VT_STR&&r->type==VT_STR){res=val_bool(strcmp(l->sval,r->sval)<=0);}
-                else die("'<=' requires numbers (line %d)",node->line);
+                else die_at(node->line, 0, "'<=' requires numbers");
             } else res=val_bool(l->nval<=r->nval);
         } else if (!strcmp(op,">=")) {
             if(l->type!=VT_NUM||r->type!=VT_NUM) {
                 if(l->type==VT_STR&&r->type==VT_STR){res=val_bool(strcmp(l->sval,r->sval)>=0);}
-                else die("'>=' requires numbers (line %d)",node->line);
+                else die_at(node->line, 0, "'>=' requires numbers");
             } else res=val_bool(l->nval>=r->nval);
         } else {
-            die("unknown binop %s (line %d)",op,node->line);
+            die_at(node->line, 0, "unknown operator '%s'", op);
             res=val_none();
         }
         GC_UNROOT_VALUE();
@@ -2918,7 +2943,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         const char *op = node->binop.op;
         Value *res;
         if (!strcmp(op,"-")) {
-            if (v->type!=VT_NUM) die("unary '-' requires a number (line %d)",node->line);
+            if (v->type!=VT_NUM) die_at(node->line, 0, "unary '-' requires a number");
             res=val_num(-v->nval);
         } else {
             res=val_bool(!how_truthy(v));
@@ -2937,10 +2962,10 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         if (tgt->type == N_IDENT) {
             if (!strcmp(op,"=")) {
                 if (!env_assign(env, tgt->sval, val))
-                    die("assignment to undeclared variable '%s' (line %d)", tgt->sval, node->line);
+                    die_at(node->line, 0, "assignment to undeclared variable '%s'", tgt->sval);
             } else {
                 Value *old = env_get(env, tgt->sval);
-                if (!old) die("assignment to undeclared variable '%s'",tgt->sval);
+                if (!old) die_at(node->line, 0, "assignment to undeclared variable '%s'", tgt->sval);
                 Value *newv = apply_augop(old, val, op, node->line);
                 env_assign(env, tgt->sval, newv);
                 val_decref(val); val_decref(newv);
@@ -2958,7 +2983,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             HowMap *fields = NULL;
             if (obj->type==VT_INSTANCE) fields=obj->inst->fields;
             else if (obj->type==VT_MAP) fields=obj->map;
-            else die("cannot assign attribute on non-instance (line %d)",node->line);
+            else die_at(node->line, 0, "cannot assign to field on non-map/instance");
             if (!strcmp(op,"=")) {
                 map_set(fields, attr, val);
             } else {
@@ -2996,7 +3021,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 int idx = (int)key->nval; val_decref(key);
                 HowList *l = obj->list;
                 if (idx<0||idx>=(int)l->len)
-                    die("list index %d out of bounds in assignment (line %d)",idx,node->line);
+                    die_at(node->line, 0, "list index %d out of bounds in assignment", idx);
                 if (!strcmp(op,"=")) {
                     val_decref(l->items[idx]);
                     l->items[idx] = val_incref(val);
@@ -3006,14 +3031,14 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                     l->items[idx] = newv;
                 }
             } else {
-                die("() assignment requires map or list (line %d)", node->line);
+                die_at(node->line, 0, "() assignment requires map or list");
             }
             GC_UNROOT_VALUE();
             val_decref(obj); val_decref(val);
             return val_none();
         }
         GC_UNROOT_VALUE();
-        die("invalid assignment target (line %d)", node->line);
+        die_at(node->line, 0, "invalid assignment target");
         return val_none();
     }
 
@@ -3025,19 +3050,19 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         Value *res = NULL;
         if (obj->type==VT_INSTANCE) {
             res = map_get(obj->inst->fields, attr);
-            if (!res) die("no field '%s' on instance (line %d)",attr,node->line);
+            if (!res) die_at(node->line, 0, "no field '%s' on instance", attr);
             res = val_incref(res);
         } else if (obj->type==VT_MAP) {
             res = map_get(obj->map, attr);
-            if (!res) die("no key '%s' in map (line %d)",attr,node->line);
+            if (!res) die_at(node->line, 0, "no key '%s' in map", attr);
             res = val_incref(res);
         } else if (obj->type==VT_MODULE) {
             res = env_get(obj->mod->env, attr);
-            if (!res) die("module '%s' has no export '%s' (line %d)",obj->mod->name,attr,node->line);
+            if (!res) die_at(node->line, 0, "module '%s' has no export '%s'", obj->mod->name, attr);
             res = val_incref(res);
         } else {
-            die("cannot access .%s on %s (line %d)",attr,
-                obj->type==VT_NONE?"none":obj->type==VT_NUM?"number":"value", node->line);
+            die_at(node->line, 0, "cannot access .%s on %s", attr,
+                obj->type==VT_NONE?"none":obj->type==VT_NUM?"number":"value");
         }
         GC_UNROOT_VALUE();
         val_decref(obj);
@@ -3104,7 +3129,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
             memcpy(s,col->sval+start,stop-start); s[stop-start]=0;
             res=val_str_own(s);
         } else {
-            die("cannot slice this type (line %d)",node->line);
+            die_at(node->line, 0, "cannot slice this type");
             res=val_none();
         }
         if(stop_v) GC_UNROOT_VALUE();
@@ -3120,10 +3145,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         fn->params   = strlist_clone(node->func.params);
         fn->branches = node->func.branches;
         fn->closure  = env; env->refcount++;
-        fn->loop_kind = node->func.loop_kind;
-        fn->iter_var = node->func.iter_var ? xstrdup(node->func.iter_var) : NULL;
-        fn->loop_start = node->func.loop_start;
-        fn->loop_stop = node->func.loop_stop;
+        fn->is_loop  = node->func.is_loop;
         fn->refcount = 1;
         /* Register fn AFTER val_new to avoid GC sweeping fn before its Value exists */
         Value *v = val_new(VT_FUNC);
@@ -3174,6 +3196,23 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         Value *v=val_map(m); map_decref(m); return v;
     }
 
+    case N_FORLOOP: {
+        HowFunc *fn = xmalloc(sizeof(HowFunc)); memset(fn,0,sizeof(HowFunc));
+        fn->is_loop     = 0;
+        fn->is_forrange = 1;
+        fn->iter_var    = xstrdup(node->forloop.iter_var);
+        fn->fr_start    = node->forloop.start;
+        fn->fr_stop     = node->forloop.stop;
+        for (int _i=0; _i<node->forloop.branches.len; _i++)
+            nl_push(&fn->branches, node->forloop.branches.nodes[_i]);
+        fn->closure  = env;
+        if (env) env->refcount++;
+        fn->refcount = 1;
+        Value *fv = val_new(VT_FUNC);
+        fv->func = fn;
+        fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
+        return fv;
+    }
 
     case N_VARDECL: {
         Value *v = eval(node->vardecl.value, env, sig);
@@ -3217,7 +3256,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     }
 
     default:
-        die("unknown node type %d (line %d)", node->type, node->line);
+        die_at(node->line, 0, "unknown node type %d", node->type);
         return val_none();
     }
 }
@@ -3232,14 +3271,14 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
     }
     if (callee->type==VT_FUNC) {
         HowFunc *fn = callee->func;
-        if (fn->loop_kind == LOOP_FORRANGE) {
+        if (fn->is_forrange) {
             int start_v = 0;
-            if (fn->loop_start) {
-                Value *sv = eval(fn->loop_start, fn->closure, sig);
+            if (fn->fr_start) {
+                Value *sv = eval(fn->fr_start, fn->closure, sig);
                 if (sig->type!=SIG_NONE) return sv;
                 start_v = (int)sv->nval; val_decref(sv);
             }
-            Value *stop_val = eval(fn->loop_stop, fn->closure, sig);
+            Value *stop_val = eval(fn->fr_stop, fn->closure, sig);
             if (sig->type!=SIG_NONE) return stop_val;
             int stop_v = (int)stop_val->nval; val_decref(stop_val);
             Env *local = env_new(fn->closure);
@@ -3259,14 +3298,14 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
             if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
             return r;
         }
-        if (fn->loop_kind == LOOP_UNBOUNDED) {
+        if (fn->is_loop) {
             run_loop(fn, sig);
             Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();
             if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
             return r;
         }
         if (argc != fn->params.len)
-            die("expected %d args but got %d (line %d)", fn->params.len, argc, line);
+            die_at(line, 0, "expected %d args but got %d", fn->params.len, argc);
         /* Hold a ref to closure so it survives env_decref(local) which decrefs parent */
         Env *closure = fn->closure;
         if (closure) closure->refcount++;
@@ -3284,7 +3323,7 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
     }
     /* Map call: map(key) → map[key] */
     if (callee->type==VT_MAP) {
-        if (argc!=1) die("map call requires exactly 1 argument (line %d)",line);
+        if (argc!=1) die_at(line, 0, "map call requires exactly 1 argument");
         char *ks = val_repr(args[0]);
         Value *v = map_get(callee->map, ks); free(ks);
         if (!v) return val_none();  /* missing key → none */
@@ -3292,21 +3331,24 @@ static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, 
     }
     /* List call: list(i) → list[i] */
     if (callee->type==VT_LIST) {
-        if (argc!=1) die("list call requires exactly 1 argument (line %d)",line);
-        if (args[0]->type!=VT_NUM) die("list index must be a number (line %d)",line);
+        if (argc!=1) die_at(line, 0, "list call requires exactly 1 argument");
+        if (args[0]->type!=VT_NUM) die_at(line, 0, "list index must be a number");
         int i=(int)args[0]->nval;
-        if (i<0||i>=callee->list->len) die("list index %d out of range (line %d)",i,line);
+        if (i<0||i>=callee->list->len) die_at(line, 0, "list index %d out of range", i);
         return val_incref(callee->list->items[i]);
     }
     if (callee->type==VT_INSTANCE) {
         /* instance(key) → field */
         if (argc!=1) die("instance call requires 1 argument (line %d)",line);
-        if (args[0]->type!=VT_STR) die("instance call key must be string (line %d)",line);
+        if (args[0]->type!=VT_STR) die_at(line, 0, "instance call key must be string");
         Value *v = map_get(callee->inst->fields, args[0]->sval);
-        if (!v) die("no field '%s' on instance (line %d)",args[0]->sval,line);
+        if (!v) die_at(line, 0, "no field '%s' on instance", args[0]->sval);
         return val_incref(v);
     }
-    die("not callable (type=%d, line=%d)", callee->type, line);
+    { const char *tn =
+        callee->type==0?"none":callee->type==1?"bool":callee->type==2?"number":
+        callee->type==3?"string":callee->type==4?"list":callee->type==5?"map":"value";
+      die_at(line, 0, "not callable (value is a %s)", tn); }
     return val_none();
 }
 
@@ -3398,119 +3440,134 @@ static void run_branches(NodeList *branches, Env *env, Signal *sig) {
     }
 }
 
-/* Shared loop semantics for all loop AST forms.
-   Contract:
-   - loop body executes repeatedly
-   - :: yields immediately (SIG_RETURN)
-   - break exits without value (SIG_BREAK)
-   - continue skips to next iteration (SIG_NEXT) */
-static void exec_loop_iteration(NodeList *branches, Env *env, Signal *sig) {
-    for (int i=0; i<branches->len && sig->type==SIG_NONE; i++) {
-        Node *b = branches->nodes[i];
-
-        if (b->type == N_VARDECL) {
-            Value *v = eval(b->vardecl.value, env, sig);
-            if (sig->type == SIG_NONE) env_set(env, b->vardecl.name, v);
-            val_decref(v);
-            continue;
-        }
-
-        if (b->type != N_BRANCH) {
-            Value *v = eval(b, env, sig);
-            val_decref(v);
-            continue;
-        }
-
-        if (b->branch.cond) {
-            Value *cv = eval(b->branch.cond, env, sig);
-            if (sig->type != SIG_NONE) {
-                val_decref(cv);
-                return;
-            }
-            int ok = how_truthy(cv);
-            val_decref(cv);
-            if (!ok) continue;
-        }
-
-        if (b->branch.is_ret) {
-            Value *v = eval(b->branch.body, env, sig);
-            if (sig->type == SIG_NONE) {
-                sig->type = SIG_RETURN;
-                sig->retval = v;
-            } else {
-                val_decref(v);
-            }
-            return;
-        }
-
-        exec_body(b->branch.body, env, sig);
-        if (sig->type != SIG_NONE) return;
-    }
-}
-
 /* Unbounded (:)= loop */
 static void run_loop(HowFunc *fn, Signal *sig) {
-    Env *local = env_new(fn->closure);
+Env *local = env_new(fn->closure);
     GC_ROOT_ENV(local);
-    while (sig->type == SIG_NONE) {
-        exec_loop_iteration(&fn->branches, local, sig);
-        if (sig->type == SIG_BREAK) {
-            sig->type = SIG_NONE;
-            break;
-        }
-        if (sig->type == SIG_NEXT) {
-            sig->type = SIG_NONE;
-            continue;
+    while (sig->type==SIG_NONE) {
+        /* all : branches fire independently per iteration */
+        for (int i=0;i<fn->branches.len && sig->type==SIG_NONE;i++) {
+            Node *b = fn->branches.nodes[i];
+            if (b->type == N_VARDECL) {
+                Value *v = eval(b->vardecl.value, local, sig);
+                if (sig->type==SIG_NONE) env_set(local, b->vardecl.name, v);
+                val_decref(v);
+                continue;
+            }
+            if (b->type != N_BRANCH) {
+                Value *v = eval(b, local, sig); val_decref(v); continue;
+            }
+            /* branch node */
+            if (b->branch.cond) {
+                /* All : branches are evaluated independently — consistent with
+                   function semantics where all matching : branches fire.
+                   :: branches also always fire (they exit immediately on match). */
+                Value *cv = eval(b->branch.cond, local, sig);
+                if (sig->type!=SIG_NONE) { val_decref(cv); break; }
+                int ok = how_truthy(cv); val_decref(cv);
+                if (!ok) continue;
+                if (b->branch.is_ret) {
+                    Value *v = eval(b->branch.body, local, sig);
+                    if (sig->type==SIG_NONE) { sig->type=SIG_RETURN; sig->retval=v; }
+                    else val_decref(v);
+                    break;
+                }
+                exec_body(b->branch.body, local, sig);
+                if (sig->type==SIG_BREAK) { sig->type=SIG_NONE; goto loop_done; }
+                if (sig->type==SIG_NEXT)  { sig->type=SIG_NONE; break; }
+                /* no conditional_fired — all : branches fire independently */
+            } else {
+                /* unconditional */
+                if (b->branch.is_ret) {
+                    Value *v = eval(b->branch.body, local, sig);
+                    if (sig->type==SIG_NONE) { sig->type=SIG_RETURN; sig->retval=v; }
+                    else val_decref(v);
+                    break;
+                }
+                exec_body(b->branch.body, local, sig);
+                if (sig->type==SIG_BREAK) { sig->type=SIG_NONE; goto loop_done; }
+            }
         }
     }
+    loop_done:
     GC_UNROOT_ENV();
     env_decref(local);
 }
 
 /* For-range loop */
-static Value *run_for_loop(HowFunc *fn, Signal *sig) {
+static Value *run_for_loop(Node *node, Env *env, Signal *sig) {
+    Signal inner = {SIG_NONE, NULL};
     int start_v = 0;
-    if (fn->loop_start) {
-        Value *sv = eval(fn->loop_start, fn->closure, sig);
-        if (sig->type != SIG_NONE) return sv;
-        start_v = (int)sv->nval;
-        val_decref(sv);
+    if (node->forloop.start) {
+        Value *sv = eval(node->forloop.start, env, sig);
+        if (sig->type!=SIG_NONE) return sv;
+        start_v = (int)sv->nval; val_decref(sv);
     }
-    Value *stop_val = eval(fn->loop_stop, fn->closure, sig);
-    if (sig->type != SIG_NONE) return stop_val;
-    int stop_v = (int)stop_val->nval;
-    val_decref(stop_val);
+    Value *stop_val = eval(node->forloop.stop, env, sig);
+    if (sig->type!=SIG_NONE) return stop_val;
+    int stop_v = (int)stop_val->nval; val_decref(stop_val);
 
-    Env *local = env_new(fn->closure);
+    NodeList *branches = &node->forloop.branches;
+    /* split body vs return branches */
+
+    Env *local = env_new(env);
     GC_ROOT_ENV(local);
+    Value *result = val_none();
+    GC_ROOT_VALUE(result);
 
-    for (int i = start_v; i < stop_v && sig->type == SIG_NONE; i++) {
+    for (int i=start_v; i<stop_v; i++) {
         Value *iv = val_num((double)i);
-        if (!env_assign(local, fn->iter_var, iv))
-            env_set(local, fn->iter_var, iv);
+        env_assign(local, node->forloop.iter_var, iv);
+        if (!env_assign(local, node->forloop.iter_var, iv))
+            env_set(local, node->forloop.iter_var, iv);
         val_decref(iv);
 
-        exec_loop_iteration(&fn->branches, local, sig);
-        if (sig->type == SIG_BREAK) {
-            sig->type = SIG_NONE;
-            break;
-        }
-        if (sig->type == SIG_NEXT) {
-            sig->type = SIG_NONE;
-            continue;
+        for (int j=0;j<branches->len;j++) {
+            Node *b = branches->nodes[j];
+            if (b->type==N_VARDECL) {
+                Value *v=eval(b->vardecl.value,local,&inner);
+                if(inner.type==SIG_NONE) env_set(local,b->vardecl.name,v);
+                val_decref(v); inner.type=SIG_NONE;
+                continue;
+            }
+            if (b->type!=N_BRANCH) {
+                Value *v=eval(b,local,&inner); val_decref(v);
+                inner.type=SIG_NONE; continue;
+            }
+            /* branch */
+            if (b->branch.is_ret) {
+                /* :: branch: evaluate, update result */
+                if (b->branch.cond) {
+                    Value *cv=eval(b->branch.cond,local,&inner);
+                    if(inner.type!=SIG_NONE){val_decref(cv);inner.type=SIG_NONE;continue;}
+                    int ok=how_truthy(cv); val_decref(cv);
+                    if(!ok) continue;
+                }
+                Value *v=eval(b->branch.body,local,&inner);
+                if(inner.type==SIG_NONE) { val_decref(result); result=v; }
+                else { val_decref(v); inner.type=SIG_NONE; }
+            } else {
+                if (b->branch.cond) {
+                    Value *cv=eval(b->branch.cond,local,&inner);
+                    if(inner.type!=SIG_NONE){val_decref(cv);inner.type=SIG_NONE;break;}
+                    int ok=how_truthy(cv); val_decref(cv);
+                    if(!ok) continue;
+                }
+                exec_body(b->branch.body, local, &inner);
+                if(inner.type==SIG_BREAK){inner.type=SIG_NONE; goto for_done;}
+                if(inner.type==SIG_NEXT) {inner.type=SIG_NONE; break;}
+                if(inner.type==SIG_RETURN){
+                    val_decref(result); result=inner.retval;
+                    inner.type=SIG_NONE; goto for_done;
+                }
+            }
         }
     }
-
+    for_done:
+    GC_UNROOT_VALUE();
     GC_UNROOT_ENV();
     env_decref(local);
-
-    if (sig->type == SIG_RETURN) {
-        Value *r = sig->retval;
-        sig->type = SIG_NONE;
-        sig->retval = NULL;
-        return r;
-    }
-    return val_none();
+    return result;
 }
 
 /* Class instantiation */
@@ -3584,20 +3641,14 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
             HowFunc *oldfn = v->func;
             StrList   saved_params   = strlist_clone(oldfn->params);
             NodeList  saved_branches = oldfn->branches;
-            LoopKind  saved_loop_kind = oldfn->loop_kind;
-            char     *saved_iter_var  = oldfn->iter_var ? xstrdup(oldfn->iter_var) : NULL;
-            Node     *saved_loop_start = oldfn->loop_start;
-            Node     *saved_loop_stop  = oldfn->loop_stop;
+            int       saved_is_loop  = oldfn->is_loop;
             inst_env->refcount++;
             HowFunc *newfn = xmalloc(sizeof(*newfn));
             memset(newfn, 0, sizeof(*newfn));
-            newfn->params     = saved_params;
-            newfn->branches   = saved_branches;
-            newfn->loop_kind  = saved_loop_kind;
-            newfn->iter_var   = saved_iter_var;
-            newfn->loop_start = saved_loop_start;
-            newfn->loop_stop  = saved_loop_stop;
-            newfn->closure    = inst_env;
+            newfn->params   = saved_params;
+            newfn->branches = saved_branches;
+            newfn->is_loop  = saved_is_loop;
+            newfn->closure  = inst_env;
             newfn->refcount = 1;
             /* Register newfn AFTER val_new to avoid GC sweeping it before its Value exists */
             Value *nv = val_new(VT_FUNC);
@@ -3690,10 +3741,9 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     }
 
     set_source_context(modname, src);
-    TokenList *tl = lex(src);
+    TokenList *tl = lex(src); free(src);
     Parser p = {tl, 0};
     Node *prog = parse_prog(&p);
-    free(src);
 
     /* run in fresh env with copy of builtins */
     Env *mod_env = env_new(NULL);
@@ -3763,7 +3813,7 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
  * We need to detect at parse time whether a { } is a list/map literal or a
  * branch function.
  *
- * Resolution: after parsing, if an N_FUNC has no params and loop_kind == LOOP_NONE, AND all
+ * Resolution: after parsing, if an N_FUNC has no params and no is_loop, AND all
  * its branches are side-effect branches (cond=NULL, is_ret=0), it may be a
  * list literal OR a branch function. We keep as N_FUNC and let the interpreter
  * distinguish: when it's called (as a function), treat as function; when used as
@@ -3825,7 +3875,7 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
 /*  REPL                                                                        */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-static void run_source_named(const char *name, const char *src, Env *env) {
+static void run_source(const char *name, const char *src, Env *env) {
     set_source_context(name, src);
     TokenList *tl = lex(src);
     Parser p = {tl, 0};
@@ -4103,7 +4153,7 @@ static void repl(Env *env) {
         /* Run with graceful error recovery */
         g_repl_active = 1;
         if (setjmp(g_repl_jmp) == 0) {
-            run_source_named("<repl>", runbuf, env);
+            run_source("<repl>", runbuf, env);
         } else {
             /* Error was caught — print it nicely and continue */
             fprintf(stderr, "\033[31m[Error] %s\033[0m\n", g_repl_errmsg);
@@ -4188,7 +4238,7 @@ int main(int argc, char **argv) {
         source[sz] = 0;
         if (f != stdin) fclose(f);
 
-        run_source_named(script, source, g_globals);
+        run_source(script, source, g_globals);
         free(source);
     }
     return 0;
