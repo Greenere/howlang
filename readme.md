@@ -210,6 +210,77 @@ p.name          # "Alice"
 p.greet("there")  # Hi there I am Alice
 ```
 
+### Error Handling
+
+Howlang has two dedicated operators for error handling: `!!` (throw) and `catch` (recover). They are siblings of `:` and `::` — no `try` block is needed.
+
+#### `!!` — throw
+
+`!!` raises an error carrying any value. It can be unconditional or conditional:
+
+```
+# Unconditional throw — always raises
+!! "something went wrong"
+
+# Conditional throw — raises only when condition is truthy (same line rule)
+b == 0 !! "division by zero"
+n < 0  !! "negative: " + str(n)
+```
+
+Inside a function, error values propagate upward exactly like return values — they unwind the call stack until a `catch` handles them or the program exits with an error message.
+
+```
+var safe_div = (a, b){
+    b == 0 !! "division by zero"
+    :: a / b
+}
+```
+
+#### `catch` — recover
+
+`catch` is a left-associative binary infix operator. It evaluates the left side; if that raises an error the handler on the right is called with the error value, and `catch` returns the handler's result. If no error occurs, the left-side value passes through untouched.
+
+```
+var result = safe_div(10, 0) catch (e){ :: -1 }
+# → -1  (error caught, handler returns fallback)
+
+var ok = safe_div(10, 2) catch (e){ :: -1 }
+# → 5   (no error, catch handler never called)
+```
+
+The error value can be any Howlang type — string, number, list, `none`:
+
+```
+var r = risky() catch (e){ :: "error: " + str(e) }
+```
+
+`catch` works anywhere an expression is valid — inside arguments, assigned to variables, nested, or chained:
+
+```
+# Catch inside an argument
+print(safe_div(1, 0) catch (e){ :: 0 })
+
+# Chained catch: re-throw from a handler is caught by the next catch
+always_fails() catch (e){ !! "re-thrown" } catch (e2){ :: "got: " + e2 }
+
+# Nested: outer error falls back to an inner computation that may itself fail
+safe_div(10, 0) catch (e){
+    :: safe_div(6, 2) catch (e2){ :: "all failed" }
+}
+```
+
+#### Unhandled errors
+
+If an error reaches the top level without being caught, the interpreter prints an error message and exits:
+
+```
+[Error] Unhandled error: division by zero
+```
+
+In the REPL, unhandled errors print the message and return to the prompt, preserving all state.
+
+---
+
 ### Modules
 
 Use `how` to import a `.how` file as a module. The module is bound under
@@ -236,7 +307,8 @@ The `where` directive and path imports work with both relative and absolute path
 | List concat| `+` (when both sides are lists)         |
 | Comparison | `==` `!=` `<` `>` `<=` `>=`            |
 | Logical    | `and` `or` `not`  (also `&&` `\|\|` `!`) |
-| Augmented  | `+=` `-=` `*=` `/=`                    |
+| Augmented  | `+=` `-=` `*=` `/=` `%=`               |
+| Error      | `!!` (throw)  `catch` (recover)        |
 
 String concatenation uses `+` (auto-coerces either side to string).
 
@@ -327,6 +399,7 @@ Howlang  |  Ctrl-D or quit() to exit
 - **Unconditional branches** (no condition, or `var` declarations) — always run
 - **`:` side-effect branches** — **all** matching branches fire independently, same as in a function body
 - **`::` return/exit branches** — the first truthy one fires and exits immediately
+- **`!!` throw branches** — the first truthy one raises an error and unwinds the stack
 - **`continue`** — skips remaining branches for this iteration, advances to next
 - **`break`** — exits the loop entirely
 
@@ -431,6 +504,7 @@ howlang/
     graph.how           # Graph + Dijkstra module
     graph_test.how      # 32-test suite for graph
     test_loops.how      # 41-test suite for loop semantics (loop-as-statement, :: exit)
+    try_catch_test.how  # 28-test suite for !! and catch error handling
 ```
 
 ---
@@ -453,4 +527,7 @@ cd samples
 
 ../howlang test_loops.how
 # 41 passed   0 failed
+
+../howlang try_catch_test.how
+# 28 passed   0 failed
 ```

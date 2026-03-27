@@ -44,7 +44,7 @@
       "patterns": [
         {
           "name": "keyword.control.howlang",
-          "match": "\\b(?:var|how|where|as|break)\\b"
+          "match": "\\b(?:var|how|where|as|break|continue|catch)\\b"
         },
         {
           "name": "keyword.operator.logical.howlang",
@@ -72,7 +72,7 @@
       "patterns": [
         {
           "name": "keyword.operator.howlang",
-          "match": "::|\\+=|-=|\\*=|/=|==|!=|<=|>=|&&|\\|\\||[+\\-*/%=<>:.]"
+          "match": "!!|::|\\+=|-=|\\*=|/=|%=|==|!=|<=|>=|&&|\\|\\||[+\\-*/%=<>:.]"
         }
       ]
     },

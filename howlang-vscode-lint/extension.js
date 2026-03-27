@@ -164,7 +164,7 @@ function scanTokens(text, document, diagnostics) {
         value += text[i];
         advance(text[i]);
       }
-      const keywords = new Set(['var', 'how', 'where', 'as', 'break', 'and', 'or', 'not', 'true', 'false', 'none']);
+      const keywords = new Set(['var', 'how', 'where', 'as', 'break', 'continue', 'catch', 'and', 'or', 'not', 'true', 'false', 'none']);
       pushToken(keywords.has(value) ? 'keyword' : 'ident', value, startLine, startCol, line, col);
       continue;
     }
@@ -172,7 +172,7 @@ function scanTokens(text, document, diagnostics) {
     const startLine = line;
     const startCol = col;
     const two = text.slice(i, i + 2);
-    const twoCharOps = new Set(['::', '+=', '-=', '*=', '/=', '==', '!=', '<=', '>=', '&&', '||']);
+    const twoCharOps = new Set(['::', '+=', '-=', '*=', '/=', '%=', '==', '!=', '!!', '<=', '>=', '&&', '||']);
     if (twoCharOps.has(two)) {
       pushToken('op', two, startLine, startCol, line, col + 2);
       advance(text[i]);
@@ -279,9 +279,9 @@ function runStructuralChecks(scan, document, diagnostics) {
       }
     }
 
-    if (token.value === 'break') {
+    if (token.value === 'break' || token.value === 'continue') {
       if (!isInsideLoop(tokens, i)) {
-        addDiagnostic(document, diagnostics, token.line, token.col, token.endCol, "'break' is usually only valid inside '(:)={...}' or range loops.", vscode.DiagnosticSeverity.Warning, 'HL105');
+        addDiagnostic(document, diagnostics, token.line, token.col, token.endCol, `'${token.value}' is usually only valid inside '(:)={...}' or range loops.`, vscode.DiagnosticSeverity.Warning, 'HL105');
       }
     }
   }

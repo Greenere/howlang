@@ -10,10 +10,10 @@
 #   "LPAREN" "RPAREN" "LBRACE" "RBRACE" "LBRACKET" "RBRACKET"
 #   "COMMA" "DOT" "COLON" "DCOLON"
 #   "PLUS" "MINUS" "STAR" "SLASH" "PERCENT"
-#   "EQ" "PLUSEQ" "MINUSEQ" "STAREQ" "SLASHEQ"
+#   "EQ" "PLUSEQ" "MINUSEQ" "STAREQ" "SLASHEQ" "PERCENTEQ"
 #   "EQEQ" "NEQ" "LT" "GT" "LTE" "GTE"
-#   "AND" "OR" "NOT"
-#   "BREAK" "HOW" "WHERE" "AS"
+#   "AND" "OR" "NOT" "DBANG"
+#   "BREAK" "CONTINUE" "HOW" "WHERE" "AS" "CATCH"
 #   "EOF"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -59,10 +59,12 @@ var keyword_type = (w){
     w == "and"   :: "AND",
     w == "or"    :: "OR",
     w == "not"   :: "NOT",
-    w == "break" :: "BREAK",
-    w == "how"   :: "HOW",
-    w == "where" :: "WHERE",
-    w == "as"    :: "AS",
+    w == "break"    :: "BREAK",
+    w == "continue" :: "CONTINUE",
+    w == "catch"    :: "CATCH",
+    w == "how"      :: "HOW",
+    w == "where"    :: "WHERE",
+    w == "as"       :: "AS",
     :: "IDENT"
 }
 
@@ -198,7 +200,7 @@ var tokenise = (src){
         # Two-char and one-char operators
         # peek_nc(src, pos, slen): next char or ""
         c == ":" or c == "=" or c == "!" or c == "<" or c == ">" or
-        c == "+" or c == "-" or c == "*" or c == "/": {
+        c == "+" or c == "-" or c == "*" or c == "/" or c == "%": {
             var nc = "",
             pos + 1 < slen: nc = src(pos+1:pos+2),
             var two = c + nc,
@@ -210,18 +212,20 @@ var tokenise = (src){
             two == "+=": { push(tokens, mktok("PLUSEQ",  "+=", line)), pos = pos + 2 },
             two == "-=": { push(tokens, mktok("MINUSEQ", "-=", line)), pos = pos + 2 },
             two == "*=": { push(tokens, mktok("STAREQ",  "*=", line)), pos = pos + 2 },
-            two == "/=": { push(tokens, mktok("SLASHEQ", "/=", line)), pos = pos + 2 },
+            two == "/=": { push(tokens, mktok("SLASHEQ",  "/=", line)), pos = pos + 2 },
+            two == "%=": { push(tokens, mktok("PERCENTEQ","%=", line)), pos = pos + 2 },
+            two == "!!": { push(tokens, mktok("DBANG",    "!!", line)), pos = pos + 2 },
             two != "::" and c == ":": { push(tokens, mktok("COLON",  ":",  line)), pos = pos + 1 },
             two != "==" and c == "=": { push(tokens, mktok("EQ",     "=",  line)), pos = pos + 1 },
-            two != "!=" and c == "!": { push(tokens, mktok("NOT",    "!",  line)), pos = pos + 1 },
+            two != "!=" and two != "!!" and c == "!": { push(tokens, mktok("NOT", "!", line)), pos = pos + 1 },
             two != "<=" and c == "<": { push(tokens, mktok("LT",     "<",  line)), pos = pos + 1 },
             two != ">=" and c == ">": { push(tokens, mktok("GT",     ">",  line)), pos = pos + 1 },
             two != "+=" and c == "+": { push(tokens, mktok("PLUS",   "+",  line)), pos = pos + 1 },
             two != "-=" and c == "-": { push(tokens, mktok("MINUS",  "-",  line)), pos = pos + 1 },
             two != "*=" and c == "*": { push(tokens, mktok("STAR",   "*",  line)), pos = pos + 1 },
-            two != "/=" and c == "/": { push(tokens, mktok("SLASH",  "/",  line)), pos = pos + 1 }
+            two != "/=" and c == "/": { push(tokens, mktok("SLASH",   "/",  line)), pos = pos + 1 },
+            two != "%=" and c == "%": { push(tokens, mktok("PERCENT", "%",  line)), pos = pos + 1 }
         },
-        c == "%": { push(tokens, mktok("PERCENT", "%", line)), pos = pos + 1 },
         c == "(": { push(tokens, mktok("LPAREN",   "(", line)), pos = pos + 1 },
         c == ")": { push(tokens, mktok("RPAREN",   ")", line)), pos = pos + 1 },
         c == "{": { push(tokens, mktok("LBRACE",   "{", line)), pos = pos + 1 },

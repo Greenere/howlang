@@ -35,7 +35,7 @@ var must_positive = (n){
 
 var first_positive = (lst){
     var i = 0
-    (:){
+    :: (:){
         i >= len(lst) !! "no positive element found"
         lst(i) > 0 :: lst(i)
         i += 1
