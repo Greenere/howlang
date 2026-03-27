@@ -300,6 +300,7 @@ Howlang  |  Ctrl-D or quit() to exit
 - **← / →**, **Ctrl-A / E** — cursor movement within the line
 - **Ctrl-K** — delete to end of line; **Ctrl-U** — clear the line
 - **Graceful errors** — parse and runtime errors print a message and the REPL continues; state is preserved
+- **Source context** — errors show the offending line and a `^` caret pointing at the problem
 
 ---
 
@@ -368,6 +369,48 @@ var sum_to = (n){
 }
 sum_to(5)   # 10
 ```
+
+---
+
+## Error Messages
+
+Both parse errors and runtime errors show the source file, line, and the offending code:
+
+```
+[ParseError] expected ')'; expected ')' but got 'var'
+  --> script.how:4:1
+   4 | var z = 5
+     | ^
+Hint: this usually means a missing ')' earlier, or a trailing comma.
+
+[RuntimeError] undefined variable 'x'
+  --> script.how:2
+   2 | var y = x + 1
+
+[RuntimeError] not callable (value is a number)
+  --> script.how:5
+   5 | result(10)
+```
+
+**Parse errors** show file, line, and column with a `^` caret. Context hints explain common mistakes:
+
+| Situation | Hint shown |
+|---|---|
+| Unexpected `::` outside a function | `::` is only valid inside function and loop bodies |
+| Unexpected `:` | `:` is a side-effect branch; use `::` to return a value |
+| Unexpected `,` where `)` expected | Missing `)` earlier, or trailing comma |
+| Missing `}` or `]` | Suggests the unclosed bracket type |
+
+**Runtime errors** show file and line with the source line for context. Common messages:
+
+| Error | Cause |
+|---|---|
+| `undefined variable 'x'` | Used before `var x = ...` |
+| `not callable (value is a number)` | Called `x(...)` but `x` is not a function/map/list |
+| `no key 'k' in map` | Dot-access on a key that doesn't exist (use `m("k")` for safe none-returning lookup) |
+| `'*' requires numbers` | Type mismatch in arithmetic |
+| `expected N args but got M` | Wrong number of arguments to a function |
+| `assignment to undeclared variable 'x'` | Assigned without `var x = ...` first |
 
 ---
 
