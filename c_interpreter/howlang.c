@@ -15,7 +15,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/stat.h>
-#include <sys/stat.h>
 #include <assert.h>
 #include <unistd.h>
 #include <setjmp.h>
@@ -72,71 +71,6 @@ static void print_source_context(FILE *f, int line, int col) {
     }
 }
 
-/* Token type → readable name */
-static const char *token_type_name(int t) {
-    switch (t) {
-        case 0:  return "EOF";
-        case 1:  return "NUMBER";
-        case 2:  return "STRING";
-        case 3:  return "BOOL";
-        case 4:  return "NONE";
-        case 5:  return "identifier";
-        case 6:  return "'var'";
-        case 7:  return "'break'";
-        case 8:  return "'continue'";
-        case 9:  return "'how'";
-        case 10: return "'where'";
-        case 11: return "'as'";
-        case 12: return "'('";
-        case 13: return "')'";
-        case 14: return "'{'";
-        case 15: return "'}'";
-        case 16: return "'['";
-        case 17: return "']'";
-        case 18: return "','";
-        case 19: return "'.'";
-        case 20: return "':'";
-        case 21: return "'::'";
-        case 22: return "'+'";
-        case 23: return "'-'";
-        case 24: return "'*'";
-        case 25: return "'/'";
-        case 26: return "'%'";
-        case 27: return "'='";
-        case 28: return "'+='";
-        case 29: return "'-='";
-        case 30: return "'*='";
-        case 31: return "'/='";
-        case 32: return "'=='";
-        case 33: return "'!='";
-        case 34: return "'<'";
-        case 35: return "'>'";
-        case 36: return "'<='";
-        case 37: return "'>='";
-        case 38: return "'and'";
-        case 39: return "'or'";
-        case 40: return "'not'";
-        default: return "<unknown>";
-    }
-}
-
-/* Hint for common parse errors */
-static const char *parse_hint_for_token(int expected, int got) {
-    if (expected == 13 && got == 18)  /* RPAREN, COMMA */
-        return "Hint: missing ')' earlier, or a trailing comma before expected expression.";
-    if (expected == 15)               /* RBRACE */
-        return "Hint: missing closing '}' for a block or map literal.";
-    if (expected == 17)               /* RBRACKET */
-        return "Hint: missing closing ']' for a bracket-call or class parameter list.";
-    if (got == 20)                    /* COLON */
-        return "Hint: ':' is a side-effect branch; use '::' to return a value.";
-    if (got == 21)                    /* DCOLON */
-        return "Hint: '::' is only valid inside function and loop bodies.";
-    if (got == 27)                    /* EQ */
-        return "Hint: did you mean '==' for comparison?";
-    return NULL;
-}
-
 static void die(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     char msg[1024];
@@ -161,9 +95,12 @@ static void die_at(int line, int col, const char *fmt, ...) {
         longjmp(g_repl_jmp, 1);
     }
     fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);
-    if (g_current_source_name && line > 0)
-        fprintf(stderr, "  --> %s:%d%s\n", g_current_source_name, line,
-                col > 0 ? "" : "");
+    if (g_current_source_name && line > 0) {
+        if (col > 0)
+            fprintf(stderr, "  --> %s:%d:%d\n", g_current_source_name, line, col);
+        else
+            fprintf(stderr, "  --> %s:%d\n", g_current_source_name, line);
+    }
     if (line > 0) print_source_context(stderr, line, col);
     exit(1);
 }
@@ -223,10 +160,76 @@ typedef enum {
     TT_LPAREN, TT_RPAREN, TT_LBRACE, TT_RBRACE, TT_LBRACKET, TT_RBRACKET,
     TT_COMMA, TT_DOT, TT_COLON, TT_DCOLON,
     TT_PLUS, TT_MINUS, TT_STAR, TT_SLASH, TT_PERCENT,
-    TT_EQ, TT_PLUSEQ, TT_MINUSEQ, TT_STAREQ, TT_SLASHEQ,
+    TT_EQ, TT_PLUSEQ, TT_MINUSEQ, TT_STAREQ, TT_SLASHEQ, TT_PERCENTEQ,
     TT_EQEQ, TT_NEQ, TT_LT, TT_GT, TT_LTE, TT_GTE,
     TT_AND, TT_OR, TT_NOT,
 } TT;
+
+/* Token type → readable name */
+static const char *token_type_name(int t) {
+    switch ((TT)t) {
+        case TT_EOF:       return "EOF";
+        case TT_NUMBER:    return "NUMBER";
+        case TT_STRING:    return "STRING";
+        case TT_BOOL:      return "BOOL";
+        case TT_NONE:      return "NONE";
+        case TT_IDENT:     return "identifier";
+        case TT_VAR:       return "'var'";
+        case TT_BREAK:     return "'break'";
+        case TT_CONTINUE:  return "'continue'";
+        case TT_HOW:       return "'how'";
+        case TT_WHERE:     return "'where'";
+        case TT_AS:        return "'as'";
+        case TT_LPAREN:    return "'('";
+        case TT_RPAREN:    return "')'";
+        case TT_LBRACE:    return "'{'";
+        case TT_RBRACE:    return "'}'";
+        case TT_LBRACKET:  return "'['";
+        case TT_RBRACKET:  return "']'";
+        case TT_COMMA:     return "','";
+        case TT_DOT:       return "'.'";
+        case TT_COLON:     return "':'";
+        case TT_DCOLON:    return "'::'";
+        case TT_PLUS:      return "'+'";
+        case TT_MINUS:     return "'-'";
+        case TT_STAR:      return "'*'";
+        case TT_SLASH:     return "'/'";
+        case TT_PERCENT:   return "'%'";
+        case TT_EQ:        return "'='";
+        case TT_PLUSEQ:    return "'+='";
+        case TT_MINUSEQ:   return "'-='";
+        case TT_STAREQ:    return "'*='";
+        case TT_SLASHEQ:   return "'/='";
+        case TT_PERCENTEQ: return "'%='";
+        case TT_EQEQ:      return "'=='";
+        case TT_NEQ:       return "'!='";
+        case TT_LT:        return "'<'";
+        case TT_GT:        return "'>'";
+        case TT_LTE:       return "'<='";
+        case TT_GTE:       return "'>='";
+        case TT_AND:       return "'and'";
+        case TT_OR:        return "'or'";
+        case TT_NOT:       return "'not'";
+        default:           return "<unknown>";
+    }
+}
+
+/* Hint for common parse errors */
+static const char *parse_hint_for_token(int expected, int got) {
+    if (expected == (int)TT_RPAREN && got == (int)TT_COMMA)
+        return "Hint: missing ')' earlier, or a trailing comma before expected expression.";
+    if (expected == (int)TT_RBRACE)
+        return "Hint: missing closing '}' for a block or map literal.";
+    if (expected == (int)TT_RBRACKET)
+        return "Hint: missing closing ']' for a bracket-call or class parameter list.";
+    if (got == (int)TT_COLON)
+        return "Hint: ':' is a side-effect branch; use '::' to return a value.";
+    if (got == (int)TT_DCOLON)
+        return "Hint: '::' is only valid inside function and loop bodies.";
+    if (got == (int)TT_EQ)
+        return "Hint: did you mean '==' for comparison?";
+    return NULL;
+}
 
 typedef struct {
     TT    type;
@@ -349,10 +352,11 @@ static TokenList *lex(const char *src) {
         case '!': TWO('!','=',TT_NEQ);   t.type=TT_NOT;   break;
         case '<': TWO('<','=',TT_LTE);   t.type=TT_LT;    break;
         case '>': TWO('>','=',TT_GTE);   t.type=TT_GT;    break;
-        case '+': TWO('+','=',TT_PLUSEQ);  t.type=TT_PLUS;  break;
-        case '-': TWO('-','=',TT_MINUSEQ); t.type=TT_MINUS; break;
-        case '*': TWO('*','=',TT_STAREQ);  t.type=TT_STAR;  break;
-        case '/': TWO('/','=',TT_SLASHEQ); t.type=TT_SLASH; break;
+        case '+': TWO('+','=',TT_PLUSEQ);    t.type=TT_PLUS;    break;
+        case '-': TWO('-','=',TT_MINUSEQ);   t.type=TT_MINUS;   break;
+        case '*': TWO('*','=',TT_STAREQ);    t.type=TT_STAR;    break;
+        case '/': TWO('/','=',TT_SLASHEQ);   t.type=TT_SLASH;   break;
+        case '%': TWO('%','=',TT_PERCENTEQ); t.type=TT_PERCENT; break;
         case '&':
             if (pos < n && src[pos] == '&') {
                 pos++;
@@ -369,7 +373,6 @@ static TokenList *lex(const char *src) {
                 die_at(line, pos - line_start + 1, "unexpected '|' — use '||' for logical or");
             }
             break;
-        case '%': t.type=TT_PERCENT;  break;
         case '(': t.type=TT_LPAREN;   break;
         case ')': t.type=TT_RPAREN;   break;
         case '{': t.type=TT_LBRACE;   break;
@@ -814,13 +817,14 @@ static Node *parse_assign(Parser *p) {
     int line = p_peek(p,0)->line;
     Node *left = parse_or(p);
     TT t = p_peek(p,0)->type;
-    if (t==TT_EQ||t==TT_PLUSEQ||t==TT_MINUSEQ||t==TT_STAREQ||t==TT_SLASHEQ) {
+    if (t==TT_EQ||t==TT_PLUSEQ||t==TT_MINUSEQ||t==TT_STAREQ||t==TT_SLASHEQ||t==TT_PERCENTEQ) {
         p_adv(p);
         const char *os = "=";
-        if      (t==TT_PLUSEQ)  os="+=";
-        else if (t==TT_MINUSEQ) os="-=";
-        else if (t==TT_STAREQ)  os="*=";
-        else if (t==TT_SLASHEQ) os="/=";
+        if      (t==TT_PLUSEQ)    os="+=";
+        else if (t==TT_MINUSEQ)   os="-=";
+        else if (t==TT_STAREQ)    os="*=";
+        else if (t==TT_SLASHEQ)   os="/=";
+        else if (t==TT_PERCENTEQ) os="%=";
         Node *right = parse_assign(p);
         Node *n = make_node(N_ASSIGN, line);
         n->assign.op     = xstrdup(os);
@@ -831,30 +835,6 @@ static Node *parse_assign(Parser *p) {
     return left;
 }
 
-#define BINOP_RULE(name, lower, ...) \
-static Node *name(Parser *p) { \
-    int line = p_peek(p,0)->line; \
-    Node *l = lower(p); \
-    TT kinds[] = {__VA_ARGS__, -1}; \
-    const char *ops[] = {__VA_ARGS__+0}; /* trick below */ \
-    for (;;) { \
-        TT t = p_peek(p,0)->type; \
-        int found = -1; \
-        TT *kp = kinds; int ki=0; \
-        while (*kp != (TT)-1) { if (*kp == t) { found=ki; break; } kp++; ki++; } \
-        if (found < 0) break; \
-        static const char *op_strs[] = {"or","and","==","!=","<",">","<=",">=","+","-","*","/","%"}; \
-        static TT op_tts[]           = {TT_OR,TT_AND,TT_EQEQ,TT_NEQ,TT_LT,TT_GT,TT_LTE,TT_GTE,TT_PLUS,TT_MINUS,TT_STAR,TT_SLASH,TT_PERCENT}; \
-        p_adv(p); \
-        const char *op = "?"; \
-        for (int oi=0;oi<13;oi++) if(op_tts[oi]==t){op=op_strs[oi];break;} \
-        Node *r = lower(p); \
-        Node *n = make_node(N_BINOP, line); \
-        n->binop.op = xstrdup(op); n->binop.left=l; n->binop.right=r; \
-        l = n; \
-    } \
-    return l; \
-}
 
 /* manual OR */
 static Node *parse_or(Parser *p) {
@@ -1598,6 +1578,7 @@ static HowInstance *g_all_instances = NULL;
 static HowModule   *g_all_modules = NULL;
 static Env         *g_all_envs = NULL;
 static Env         *g_globals = NULL;
+static HowMap      *g_module_registry = NULL;  /* name -> module Value, for import caching */
 
 static size_t g_gc_allocations = 0;
 static size_t g_gc_collections = 0;
@@ -2051,25 +2032,15 @@ static char *find_how_file(const char *name) {
     return xstrdup(path);
 }
 
-/* Control flow signals via longjmp */
-#include <setjmp.h>
-
-typedef struct SignalReturn { Value *val; } SignalReturn;
-typedef struct SignalBreak  { int dummy; } SignalBreak;
-
-/* We use a linked list of "signal frames" instead of exceptions */
+/* Control flow signals */
 typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK, SIG_NEXT } SigType;
 typedef struct { SigType type; Value *retval; } Signal;
-
-/* Global interpreter state */
-static Env *g_globals;
 
 /* Forward declarations */
 static Value *eval(Node *node, Env *env, Signal *sig);
 static Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line);
 static void run_branches(NodeList *branches, Env *env, Signal *sig);
 static void run_loop(HowFunc *fn, Signal *sig);
-static Value *run_for_loop(Node *node, Env *env, Signal *sig);
 static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig);
 static void exec_stmt(Node *node, Env *env, Signal *sig);
 static void exec_import(const char *modname, const char *alias, Env *env);
@@ -2729,6 +2700,7 @@ static void gc_collect(Env *root_env) {
     gc_mark_root_stacks();
     gc_mark_env(root_env);
     if (g_globals && g_globals != root_env) gc_mark_env(g_globals);
+    if (g_module_registry) gc_mark_map(g_module_registry);
     gc_sweep_values();
     gc_sweep_maps();
     gc_sweep_lists();
@@ -2778,7 +2750,6 @@ static void setup_globals(Env *env) {
     REG("quit",    quit_fn);
     REG("gc",      gc_fn);
     REG("_host_call",      host_call_fn);
-    REG("_add_search_dir", add_search_dir_fn);
     REG("_basename", basename_fn);
     REG("_dirname",  dirname_fn);
     /* bool() as a function */
@@ -2824,6 +2795,11 @@ static Value *apply_augop(Value *old, Value *val, const char *op, int line) {
         if (old->type!=VT_NUM||val->type!=VT_NUM) die_at(line, 0, "/= requires numbers");
         if (val->nval==0) die_at(line, 0, "division by zero");
         Value *ret = val_num(old->nval / val->nval); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
+    }
+    if (!strcmp(op,"%=")) {
+        if (old->type!=VT_NUM||val->type!=VT_NUM) die_at(line, 0, "%%= requires numbers");
+        if (val->nval==0) die_at(line, 0, "modulo by zero");
+        Value *ret = val_num(fmod(old->nval, val->nval)); GC_UNROOT_VALUE(); GC_UNROOT_VALUE(); return ret;
     }
     die_at(line, 0, "unknown augop %s", op);
     GC_UNROOT_VALUE();
@@ -3494,82 +3470,6 @@ Env *local = env_new(fn->closure);
     env_decref(local);
 }
 
-/* For-range loop */
-static Value *run_for_loop(Node *node, Env *env, Signal *sig) {
-    Signal inner = {SIG_NONE, NULL};
-    int start_v = 0;
-    if (node->forloop.start) {
-        Value *sv = eval(node->forloop.start, env, sig);
-        if (sig->type!=SIG_NONE) return sv;
-        start_v = (int)sv->nval; val_decref(sv);
-    }
-    Value *stop_val = eval(node->forloop.stop, env, sig);
-    if (sig->type!=SIG_NONE) return stop_val;
-    int stop_v = (int)stop_val->nval; val_decref(stop_val);
-
-    NodeList *branches = &node->forloop.branches;
-    /* split body vs return branches */
-
-    Env *local = env_new(env);
-    GC_ROOT_ENV(local);
-    Value *result = val_none();
-    GC_ROOT_VALUE(result);
-
-    for (int i=start_v; i<stop_v; i++) {
-        Value *iv = val_num((double)i);
-        env_assign(local, node->forloop.iter_var, iv);
-        if (!env_assign(local, node->forloop.iter_var, iv))
-            env_set(local, node->forloop.iter_var, iv);
-        val_decref(iv);
-
-        for (int j=0;j<branches->len;j++) {
-            Node *b = branches->nodes[j];
-            if (b->type==N_VARDECL) {
-                Value *v=eval(b->vardecl.value,local,&inner);
-                if(inner.type==SIG_NONE) env_set(local,b->vardecl.name,v);
-                val_decref(v); inner.type=SIG_NONE;
-                continue;
-            }
-            if (b->type!=N_BRANCH) {
-                Value *v=eval(b,local,&inner); val_decref(v);
-                inner.type=SIG_NONE; continue;
-            }
-            /* branch */
-            if (b->branch.is_ret) {
-                /* :: branch: evaluate, update result */
-                if (b->branch.cond) {
-                    Value *cv=eval(b->branch.cond,local,&inner);
-                    if(inner.type!=SIG_NONE){val_decref(cv);inner.type=SIG_NONE;continue;}
-                    int ok=how_truthy(cv); val_decref(cv);
-                    if(!ok) continue;
-                }
-                Value *v=eval(b->branch.body,local,&inner);
-                if(inner.type==SIG_NONE) { val_decref(result); result=v; }
-                else { val_decref(v); inner.type=SIG_NONE; }
-            } else {
-                if (b->branch.cond) {
-                    Value *cv=eval(b->branch.cond,local,&inner);
-                    if(inner.type!=SIG_NONE){val_decref(cv);inner.type=SIG_NONE;break;}
-                    int ok=how_truthy(cv); val_decref(cv);
-                    if(!ok) continue;
-                }
-                exec_body(b->branch.body, local, &inner);
-                if(inner.type==SIG_BREAK){inner.type=SIG_NONE; goto for_done;}
-                if(inner.type==SIG_NEXT) {inner.type=SIG_NONE; break;}
-                if(inner.type==SIG_RETURN){
-                    val_decref(result); result=inner.retval;
-                    inner.type=SIG_NONE; goto for_done;
-                }
-            }
-        }
-    }
-    for_done:
-    GC_UNROOT_VALUE();
-    GC_UNROOT_ENV();
-    env_decref(local);
-    return result;
-}
-
 /* Class instantiation */
 static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig) {
     if (argc != cls->params.len)
@@ -3685,8 +3585,6 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
     return result;
 }
 
-/* exec_body forward decl — already defined above but referenced here */
-
 /* Module import */
 static void exec_import(const char *modname, const char *alias, Env *env) {
     /* modname may be "path/to/module" (string-path form) or bare "module" */
@@ -3723,6 +3621,22 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
         strncpy(bind_name, modname, sizeof(bind_name)-1);
         bind_name[sizeof(bind_name)-1] = 0;
     }
+    /* Check module cache to avoid re-executing already-loaded modules */
+    if (g_module_registry) {
+        Value *cached = map_get(g_module_registry, modname);
+        if (cached) {
+            /* Re-bind exports and module value from cache */
+            if (cached->type == VT_MODULE) {
+                Env *pub_env = cached->mod->env;
+                for (int i = 0; i < pub_env->len; i++)
+                    env_set(env, pub_env->entries[i].key, pub_env->entries[i].val);
+            }
+            const char *final_name = (alias && alias[0]) ? alias : bind_name;
+            env_set(env, final_name, cached);
+            return;
+        }
+    }
+
     char *path = find_how_file(modname);
     FILE *fh = fopen(path,"r");
     if (!fh) die("cannot find module '%s' (searched dirs)", modname);
@@ -3783,6 +3697,8 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     mod->gc_next = g_all_modules; g_all_modules = mod; g_gc_allocations++;
 
     Value *modval = val_new(VT_MODULE); modval->mod = mod;
+    /* Register in module cache to prevent re-loading and circular import loops */
+    if (g_module_registry) map_set(g_module_registry, modname, modval);
     /* Bind each exported var directly so helpers are accessible by name */
     for (int i=0;i<pub_env->len;i++) {
         env_set(env, pub_env->entries[i].key, pub_env->entries[i].val);
@@ -3797,79 +3713,10 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     GC_UNROOT_ENV();
     env_decref(mod_env);
     GC_UNROOT_ENV();
-    gc_clear_root_stacks();
-    GC_ROOT_ENV(env);
+    /* Collect without wiping the caller's GC roots */
     gc_collect(env);
-    GC_UNROOT_ENV();
 }
 
-/* ─────────────────────────────────────────────────────────────────────────── */
-/*  Map/list literal parsing: handle {val, val} as list, {k: v} as map        */
-/* ─────────────────────────────────────────────────────────────────────────── */
-
-/*
- * The map literal problem: {expr, expr, ...} is a list if no colons are used
- * as map keys. But we parse { } as an anonymous function/branch-function.
- * We need to detect at parse time whether a { } is a list/map literal or a
- * branch function.
- *
- * Resolution: after parsing, if an N_FUNC has no params and no is_loop, AND all
- * its branches are side-effect branches (cond=NULL, is_ret=0), it may be a
- * list literal OR a branch function. We keep as N_FUNC and let the interpreter
- * distinguish: when it's called (as a function), treat as function; when used as
- * a value, treat as the function value itself.
- *
- * ACTUALLY in Howlang: { expr, expr, ... } with no colons IS a list literal.
- * We need to distinguish at parse time. Let me fix the map/list literal parser.
- *
- * This is handled by the eval_call_val: when callee is VT_FUNC and is called
- * with 0 args, it runs the func. When a { expr, expr } block is used as a value,
- * it creates a HowFunc.
- *
- * The list/map literal {v1, v2} vs {k1: v1} is handled in parse_atom (N_FUNC case).
- * We need to revisit: in Howlang, {a, b, c} is a list literal (items without colons),
- * and {k: v, ...} is a map literal. The parser currently treats all { } as functions.
- *
- * SOLUTION: scan ahead in parse_atom { } to determine if it's list/map vs function.
- */
-
-/* The existing parse_atom handles { } as a function (branch body).
- * To support {v, v, v} as list and {k:v, k:v} as map literals:
- * We'll handle this in eval: when an N_FUNC with no params and is_loop=0 is USED
- * as a MAP_LIT (i.e., appears in a context expecting a value, not being called),
- * we evaluate its "body" branches.
- *
- * Actually the cleanest approach: re-parse the branches of such functions.
- * A branch with cond=NULL, is_ret=0, body=expr → list element
- * A branch with cond=ident/str, is_ret=0, body=expr → map entry
- *
- * We handle this in the N_FUNC eval case: if the function has no params, no is_loop,
- * and is not being called — it IS the function value (a closure). This is correct.
- *
- * For list/map literals: {a, b, c} — parse_branch produces:
- *   branch(cond=None, body=a, is_ret=0)
- *   branch(cond=None, body=b, is_ret=0)
- *   branch(cond=None, body=c, is_ret=0)
- *
- * For map {k:v}: 
- *   branch(cond=ident(k), body=v, is_ret=0)
- *
- * These look the same as function bodies! The only way to know is context.
- * In Howlang: {v, v, v}() is calling a branch function; {v, v, v} as a value
- * IS the function value. To get a list, you'd write: list() + push(...) or
- * use the list literal syntax which... is actually {v, v, v} when no colons.
- *
- * Looking at how the Python interpreter handles this: in eval_map_lit, items
- * with key=None are list items, items with key are map items. The parser produces
- * MapLit with key=None for lists. We need to replicate this.
- *
- * The N_FUNC from { } is used both as a function AND as a map/list literal.
- * Context determines which. When used as a call target: function. As a value
- * in a map literal or list: evaluated immediately.
- *
- * Actually: { "a", "b", "c" } IS a list literal in Howlang (based on the Python
- * interp's MapLit handling). Let me fix parse_atom to detect this.
- */
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  REPL                                                                        */
@@ -4177,6 +4024,7 @@ int main(int argc, char **argv) {
     g_globals = env_new(NULL);
     setup_globals(g_globals);
     g_num_builtins = g_globals->len;  /* snapshot: only real builtins */
+    g_module_registry = map_new();
 
     /* Build args list: argv[1:] */
     HowList *args_list = list_new();
