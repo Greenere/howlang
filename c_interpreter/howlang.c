@@ -163,6 +163,8 @@ typedef enum {
     TT_EQ, TT_PLUSEQ, TT_MINUSEQ, TT_STAREQ, TT_SLASHEQ, TT_PERCENTEQ,
     TT_EQEQ, TT_NEQ, TT_LT, TT_GT, TT_LTE, TT_GTE,
     TT_AND, TT_OR, TT_NOT,
+    TT_DBANG,   /* !! — throw operator */
+    TT_CATCH,   /* catch keyword */
 } TT;
 
 /* Token type → readable name */
@@ -210,6 +212,8 @@ static const char *token_type_name(int t) {
         case TT_AND:       return "'and'";
         case TT_OR:        return "'or'";
         case TT_NOT:       return "'not'";
+        case TT_DBANG:     return "'!!'";
+        case TT_CATCH:     return "'catch'";
         default:           return "<unknown>";
     }
 }
@@ -339,6 +343,7 @@ static TokenList *lex(const char *src) {
             else if (!strcmp(tmp,"how"))   { t.type = TT_HOW; }
             else if (!strcmp(tmp,"where")) { t.type = TT_WHERE; }
             else if (!strcmp(tmp,"as"))    { t.type = TT_AS; }
+            else if (!strcmp(tmp,"catch")) { t.type = TT_CATCH; }
             else { t.type = TT_IDENT; t.sval = xstrdup(tmp); }
             tl_push(tl, t); continue;
         }
@@ -349,7 +354,9 @@ static TokenList *lex(const char *src) {
         switch(c) {
         case ':': TWO(':',':',TT_DCOLON); t.type=TT_COLON; break;
         case '=': TWO('=','=',TT_EQEQ);  t.type=TT_EQ;    break;
-        case '!': TWO('!','=',TT_NEQ);   t.type=TT_NOT;   break;
+        case '!':
+            if (pos < n && src[pos]=='!') { pos++; t.type=TT_DBANG; break; }
+            TWO('!','=',TT_NEQ); t.type=TT_NOT; break;
         case '<': TWO('<','=',TT_LTE);   t.type=TT_LT;    break;
         case '>': TWO('>','=',TT_GTE);   t.type=TT_GT;    break;
         case '+': TWO('+','=',TT_PLUSEQ);    t.type=TT_PLUS;    break;
@@ -403,6 +410,7 @@ typedef enum {
     N_MAP_LIT,      /* map or list literal */
     N_BLOCK,
     N_BRANCH,
+    N_CATCH,
     N_VARDECL,
     N_EXPRSTMT,
     N_IMPORT,
@@ -511,7 +519,13 @@ struct Node {
             Node *cond;         /* NULL = unconditional */
             Node *body;
             int   is_ret;       /* 1 = :: */
+            int   is_throw;     /* 1 = !! */
         } branch;
+
+        struct { /* N_CATCH */
+            Node *expr;     /* expression that may raise SIG_ERROR */
+            Node *handler;  /* callable: called with error value on error */
+        } catch_node;
 
         struct { /* N_VARDECL */
             char *name;
@@ -733,6 +747,17 @@ static Node *parse_branch(Parser *p) {
         return n;
     }
 
+    /* !! body — unconditional throw */
+    if (p_check(p, TT_DBANG)) {
+        p_adv(p);
+        Node *body = parse_expr(p);
+        Node *n = make_node(N_BRANCH, line);
+        n->branch.cond     = NULL;
+        n->branch.body     = body;
+        n->branch.is_throw = 1;
+        return n;
+    }
+
     /* cond :: body  or  cond : body  or  bare expr */
     Node *cond = parse_expr(p);
 
@@ -770,6 +795,13 @@ static Node *parse_branch(Parser *p) {
         n->branch.cond = cond; n->branch.body = body; n->branch.is_ret = 1;
         return n;
     }
+    if (p_check(p, TT_DBANG) && p_peek(p,0)->line == cond->line) {
+        p_adv(p);
+        Node *body = parse_expr(p);
+        Node *n = make_node(N_BRANCH, line);
+        n->branch.cond = cond; n->branch.body = body; n->branch.is_throw = 1;
+        return n;
+    }
     if (p_check(p, TT_COLON)) {
         p_adv(p);
         Node *body;
@@ -801,6 +833,7 @@ static Node *parse_branch(Parser *p) {
 /* ── Expression parsing (precedence climbing) ──────────────────────────────── */
 
 static Node *parse_assign(Parser *p);
+static Node *parse_catch(Parser *p);
 static Node *parse_or(Parser *p);
 static Node *parse_and(Parser *p);
 static Node *parse_eq(Parser *p);
@@ -815,7 +848,7 @@ static Node *parse_expr(Parser *p) { return parse_assign(p); }
 
 static Node *parse_assign(Parser *p) {
     int line = p_peek(p,0)->line;
-    Node *left = parse_or(p);
+    Node *left = parse_catch(p);
     TT t = p_peek(p,0)->type;
     if (t==TT_EQ||t==TT_PLUSEQ||t==TT_MINUSEQ||t==TT_STAREQ||t==TT_SLASHEQ||t==TT_PERCENTEQ) {
         p_adv(p);
@@ -835,6 +868,21 @@ static Node *parse_assign(Parser *p) {
     return left;
 }
 
+
+/* catch: expr catch handler — left-associative, lower than or, higher than assign */
+static Node *parse_catch(Parser *p) {
+    int line = p_peek(p,0)->line;
+    Node *left = parse_or(p);
+    while (p_check(p, TT_CATCH)) {
+        p_adv(p);
+        Node *handler = parse_or(p);
+        Node *n = make_node(N_CATCH, line);
+        n->catch_node.expr    = left;
+        n->catch_node.handler = handler;
+        left = n;
+    }
+    return left;
+}
 
 /* manual OR */
 static Node *parse_or(Parser *p) {
@@ -981,9 +1029,9 @@ static Node *parse_call(Parser *p) {
                 if (!p_check(p, TT_RPAREN))
                     slice_stop = parse_expr(p);
             } else if (!p_check(p,TT_RPAREN)) {
-                /* parse first arg at or-level (not assign-level) to prevent
-                   f(x=5) from silently assigning to outer x */
-                Node *first = parse_or(p);
+                /* parse first arg at catch-level (not assign-level) to prevent
+                   f(x=5) from silently assigning to outer x, but allow catch */
+                Node *first = parse_catch(p);
                 if (p_check(p, TT_COLON)) {
                     is_slice = 1;
                     slice_start = first;
@@ -991,14 +1039,14 @@ static Node *parse_call(Parser *p) {
                     if (!p_check(p, TT_RPAREN))
                         slice_stop = parse_expr(p);
                 } else if (is_slice == 0) {
-                    /* regular call — args parsed at or-level to prevent
-                       f(x=5) from silently assigning to outer x */
+                    /* regular call — args parsed at catch-level to allow catch
+                       but not assign, so f(x=5) doesn't silently assign to x */
                     Node *c = make_node(N_CALL, line);
                     c->call.callee  = n;
                     c->call.bracket = 0;
                     nl_push(&c->call.args, first);
                     while (p_match(p,TT_COMMA) && !p_check(p,TT_RPAREN))
-                        nl_push(&c->call.args, parse_or(p));
+                        nl_push(&c->call.args, parse_catch(p));
                     p_expect(p,TT_RPAREN,"expected ')'");
                     last_line = cur_line;
                     n = c;
@@ -2033,7 +2081,7 @@ static char *find_how_file(const char *name) {
 }
 
 /* Control flow signals */
-typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK, SIG_NEXT } SigType;
+typedef enum { SIG_NONE, SIG_RETURN, SIG_BREAK, SIG_NEXT, SIG_ERROR } SigType;
 typedef struct { SigType type; Value *retval; } Signal;
 
 /* Forward declarations */
@@ -2467,6 +2515,12 @@ BUILTIN(host_call_fn) {
     Value *res = eval_call_val(fn, argv2, args_list->len, &sig, 0);
     free(argv2);
     if (sig.type==SIG_RETURN) { val_decref(sig.retval); sig.retval=NULL; }
+    if (sig.type==SIG_ERROR) {
+        char *s = sig.retval ? val_repr(sig.retval) : xstrdup("unknown error");
+        if (sig.retval) val_decref(sig.retval);
+        val_decref(res);
+        die("unhandled error in _host_call: %s", s);
+    }
     return res;
 }
 
@@ -3216,6 +3270,33 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         exec_stmt(node, env, sig);
         return val_none();
 
+    case N_CATCH: {
+        /* evaluate the expression in an inner signal; catch SIG_ERROR */
+        Signal inner = {SIG_NONE, NULL};
+        Value *v = eval(node->catch_node.expr, env, &inner);
+        if (inner.type == SIG_ERROR) {
+            /* expression raised an error — call handler(err) */
+            Value *err = inner.retval ? inner.retval : val_none();
+            GC_ROOT_VALUE(err);
+            val_decref(v);
+            Value *handler = eval(node->catch_node.handler, env, sig);
+            if (sig->type != SIG_NONE) {
+                GC_UNROOT_VALUE(); val_decref(err);
+                return handler;
+            }
+            GC_ROOT_VALUE(handler);
+            Value *result = eval_call_val(handler, &err, 1, sig, node->line);
+            GC_UNROOT_VALUE(); /* handler */
+            GC_UNROOT_VALUE(); /* err */
+            val_decref(handler);
+            val_decref(err);
+            return result;
+        }
+        /* no error — propagate any other signal (RETURN, BREAK, NEXT) */
+        if (inner.type != SIG_NONE) *sig = inner;
+        return v;
+    }
+
     case N_IMPORT:
         exec_import(node->import_node.path, node->import_node.alias, env);
         return val_none();
@@ -3366,7 +3447,15 @@ static void exec_stmt(Node *node, Env *env, Signal *sig) {
             val_decref(cv);
         }
         if (!cond_ok) return;
-        if (node->branch.is_ret) {
+        if (node->branch.is_throw) {
+            Value *v = eval(node->branch.body, env, sig);
+            if (sig->type==SIG_NONE) {
+                sig->type = SIG_ERROR;
+                sig->retval = v;
+            } else {
+                val_decref(v);
+            }
+        } else if (node->branch.is_ret) {
             Value *v = eval(node->branch.body, env, sig);
             if (sig->type==SIG_NONE) {
                 sig->type = SIG_RETURN;
@@ -3442,6 +3531,12 @@ Env *local = env_new(fn->closure);
                 if (sig->type!=SIG_NONE) { val_decref(cv); break; }
                 int ok = how_truthy(cv); val_decref(cv);
                 if (!ok) continue;
+                if (b->branch.is_throw) {
+                    Value *v = eval(b->branch.body, local, sig);
+                    if (sig->type==SIG_NONE) { sig->type=SIG_ERROR; sig->retval=v; }
+                    else val_decref(v);
+                    break;
+                }
                 if (b->branch.is_ret) {
                     Value *v = eval(b->branch.body, local, sig);
                     if (sig->type==SIG_NONE) { sig->type=SIG_RETURN; sig->retval=v; }
@@ -3454,6 +3549,12 @@ Env *local = env_new(fn->closure);
                 /* no conditional_fired — all : branches fire independently */
             } else {
                 /* unconditional */
+                if (b->branch.is_throw) {
+                    Value *v = eval(b->branch.body, local, sig);
+                    if (sig->type==SIG_NONE) { sig->type=SIG_ERROR; sig->retval=v; }
+                    else val_decref(v);
+                    break;
+                }
                 if (b->branch.is_ret) {
                     Value *v = eval(b->branch.body, local, sig);
                     if (sig->type==SIG_NONE) { sig->type=SIG_RETURN; sig->retval=v; }
@@ -3669,6 +3770,11 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     Signal sig = {SIG_NONE, NULL};
     for (int i=0;i<prog->prog.stmts.len;i++) {
         exec_stmt(prog->prog.stmts.nodes[i], mod_env, &sig);
+        if (sig.type==SIG_ERROR) {
+            char *s = sig.retval ? val_repr(sig.retval) : xstrdup("unknown error");
+            if (sig.retval) val_decref(sig.retval);
+            die("unhandled error in module '%s': %s", modname, s);
+        }
         sig.type=SIG_NONE;
     }
 
@@ -3730,6 +3836,19 @@ static void run_source(const char *name, const char *src, Env *env) {
     Signal sig = {SIG_NONE, NULL};
     for (int i=0;i<prog->prog.stmts.len;i++) {
         exec_stmt(prog->prog.stmts.nodes[i], env, &sig);
+        if (sig.type==SIG_ERROR) {
+            char *s = sig.retval ? val_repr(sig.retval) : xstrdup("unknown error");
+            if (sig.retval) val_decref(sig.retval);
+            sig.retval = NULL; sig.type = SIG_NONE;
+            if (g_repl_active) {
+                snprintf(g_repl_errmsg, sizeof(g_repl_errmsg), "Unhandled error: %s", s);
+                free(s);
+                longjmp(g_repl_jmp, 1);
+            }
+            fprintf(stderr, "\033[31m[Error]\033[0m Unhandled error: %s\n", s);
+            free(s);
+            exit(1);
+        }
         if (sig.type==SIG_RETURN && sig.retval) {
             val_decref(sig.retval);
             sig.retval=NULL;

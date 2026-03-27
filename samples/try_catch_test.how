@@ -1,0 +1,203 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Error Handling — Test Suite for !! (throw) and catch
+# ─────────────────────────────────────────────────────────────────────────────
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        print("  PASS  " + label),
+        passed = passed + 1
+    },
+    got != expected: {
+        print("  FAIL  " + label + "  →  got: " + str(got) + "  expected: " + str(expected)),
+        failed = failed + 1
+    }
+}
+
+var assert_true = (label, val){
+    assert_eq(label, val, true)
+}
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+var safe_div = (a, b){
+    b == 0 !! "division by zero"
+    :: a / b
+}
+
+var must_positive = (n){
+    n <= 0 !! "expected positive, got " + str(n)
+    :: n
+}
+
+var first_positive = (lst){
+    var i = 0
+    (:){
+        i >= len(lst) !! "no positive element found"
+        lst(i) > 0 :: lst(i)
+        i += 1
+    }()
+}
+
+
+print("─── Basic catch: error path ─────────────────────────────────────────────")
+
+var r1 = safe_div(10, 0) catch (e){ :: "caught:" + e }
+assert_eq("catch receives error value",  r1, "caught:division by zero")
+
+var r2 = must_positive(-3) catch (e){ :: -1 }
+assert_eq("catch returns handler result", r2, -1)
+
+var r3 = must_positive(0) catch (e){ :: 0 }
+assert_eq("zero triggers throw",         r3, 0)
+
+
+print("─── Basic catch: no-error path ─────────────────────────────────────────")
+
+var r4 = safe_div(10, 2) catch (e){ :: -1 }
+assert_eq("catch not called when no error",   r4, 5)
+
+var r5 = must_positive(7) catch (e){ :: -1 }
+assert_eq("positive value passes through",    r5, 7)
+
+var r6 = 42 catch (e){ :: 0 }
+assert_eq("literal never raises",            r6, 42)
+
+
+print("─── Unconditional throw !! ──────────────────────────────────────────────")
+
+var always_fails = (){
+    !! "always"
+    :: "unreachable"
+}
+
+var r7 = always_fails() catch (e){ :: e }
+assert_eq("unconditional !! always throws", r7, "always")
+
+
+print("─── Conditional throw: only fires when condition is truthy ───────────────")
+
+var check_range = (n){
+    n < 0   !! "too small"
+    n > 100 !! "too large"
+    :: n
+}
+
+assert_eq("in-range passes through",        check_range(50) catch (e){ :: e }, 50)
+assert_eq("below range throws too small",   check_range(-1) catch (e){ :: e }, "too small")
+assert_eq("above range throws too large",   check_range(200) catch (e){ :: e }, "too large")
+assert_eq("boundary 0 is ok",              check_range(0) catch (e){ :: e }, 0)
+assert_eq("boundary 100 is ok",            check_range(100) catch (e){ :: e }, 100)
+
+
+print("─── Error propagation through function calls ────────────────────────────")
+
+var outer = (n){
+    :: must_positive(n)
+}
+
+var r8 = outer(5) catch (e){ :: "err" }
+assert_eq("no error propagates correctly",    r8, 5)
+
+var r9 = outer(-1) catch (e){ :: "propagated:" + e }
+assert_eq("error propagates through caller", r9, "propagated:expected positive, got -1")
+
+var deep = (n){
+    var mid = (x){
+        :: safe_div(x, 0)
+    }
+    :: mid(n)
+}
+
+var r10 = deep(5) catch (e){ :: "deep:" + e }
+assert_eq("error propagates through deep stack", r10, "deep:division by zero")
+
+
+print("─── Error value can be any type ─────────────────────────────────────────")
+
+var throw_num = (){
+    !! 404
+}
+var throw_list = (){
+    !! {1, 2, 3}
+}
+var throw_none = (){
+    !! none
+}
+
+var r11 = throw_num() catch (e){ :: e + 1 }
+assert_eq("error value is a number",     r11, 405)
+
+var r12 = throw_list() catch (e){ :: len(e) }
+assert_eq("error value is a list",       r12, 3)
+
+var r13 = throw_none() catch (e){ :: e == none }
+assert_eq("error value is none",         r13, true)
+
+
+print("─── Nested catch ────────────────────────────────────────────────────────")
+
+var r14 = safe_div(10, 0) catch (e){
+    :: safe_div(6, 2) catch (e2){ :: -1 }
+}
+assert_eq("inner catch succeeds, outer catch runs it",  r14, 3)
+
+var r15 = safe_div(10, 0) catch (e){
+    :: safe_div(5, 0) catch (e2){ :: "both failed" }
+}
+assert_eq("both fail, innermost catch handles it",      r15, "both failed")
+
+var r16 = safe_div(8, 2) catch (e){
+    :: safe_div(6, 2) catch (e2){ :: -1 }
+}
+assert_eq("outer succeeds, catch handler never runs",   r16, 4)
+
+
+print("─── catch inside arguments ──────────────────────────────────────────────")
+
+var add = (a, b){ :: a + b }
+
+var r17 = add(safe_div(10, 2) catch (e){ :: 0 },
+              safe_div(9, 3)  catch (e){ :: 0 })
+assert_eq("catch works inside call args",  r17, 8)
+
+var r18 = add(safe_div(10, 0) catch (e){ :: -1 },
+              safe_div(9, 3)  catch (e){ :: 0 })
+assert_eq("one arg fails, handler provides fallback",  r18, 2)
+
+
+print("─── throw inside a loop ─────────────────────────────────────────────────")
+
+var r19 = first_positive({-3, -1, 0, 5, 8}) catch (e){ :: -1 }
+assert_eq("finds first positive in list",    r19, 5)
+
+var r20 = first_positive({-3, -2, -1}) catch (e){ :: -1 }
+assert_eq("no positive → catch gets -1",    r20, -1)
+
+var r21 = first_positive({7}) catch (e){ :: -1 }
+assert_eq("single positive found",           r21, 7)
+
+
+print("─── Suppress error (catch with side-effect, return none) ─────────────────")
+
+var r22 = must_positive(-1) catch (e){ :: none }
+assert_eq("suppress error returns none",    r22, none)
+
+
+print("─── catch left-associativity ────────────────────────────────────────────")
+
+var always_fails2 = (){
+    !! "err"
+}
+
+var r23 = always_fails2() catch (e){ !! "re-thrown" } catch (e2){ :: "re-caught:" + e2 }
+assert_eq("re-throw caught by chained catch", r23, "re-caught:re-thrown")
+
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════")
