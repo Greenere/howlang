@@ -233,23 +233,48 @@ void    gc_clear_root_stacks(void);
 
 /* ── Evaluator internals (defined in runtime.c) ─────────────────────────── */
 
+Value  *eval(Node *node, Env *env, Signal *sig);
+void    run_branches(NodeList *branches, Env *env, Signal *sig);
+void    run_loop(HowFunc *fn, Signal *sig);
+Value  *run_parallel_loop(HowFunc *fn, Signal *sig);
+Value  *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig);
 Value  *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line);
 void    exec_body(Node *body, Env *env, Signal *sig);
+void    exec_stmt(Node *node, Env *env, Signal *sig);
 
-/* ── Module path (defined in runtime.c) ─────────────────────────────────── */
+/* ── Module import (defined in import.c) ────────────────────────────────── */
 
 char   *find_how_file(const char *name);
+void    exec_import(const char *modname, const char *alias, Env *env);
 
 /* ── Builtin registration (defined in builtins.c) ───────────────────────── */
 
 Value  *make_builtin(const char *name, BuiltinFn fn);
 void    setup_globals(Env *env);
 
-/* ── Automatic differentiation (defined in gc.c / runtime.c) ───────────── */
+/* ── Automatic differentiation (defined in ad.c) ────────────────────────── */
 
 Value  *val_dual(double v, double t);
 Value  *compute_grad_closure(Value *primal_fn, Signal *sig);
+Value  *call_custom_grad(HowFunc *primal_fn, Value **args, int argc, Signal *sig, int line);
+Value  *dual_binop(Value *l, Value *r, const char *op, int line);
+void    tape_ensure_entry(void);
+Value  *tape_new_val(double primal);
 
-extern int g_tape_active;
+typedef struct {
+    int    out_id;
+    char   op[8];
+    int    in_ids[2];
+    double in_vals[2];
+} TapeEntry;
+
+extern TapeEntry *g_tape;
+extern int        g_tape_len;
+extern int        g_tape_next_id;
+extern int        g_tape_vsize;
+extern int        g_tape_active;
+
+#define IS_TAPE_VAL(v)  ((v)->type==VT_DUAL && (v)->dual.tan < -0.5)
+#define TAPE_ID(v)      ((int)(-(v)->dual.tan) - 1)
 
 #endif

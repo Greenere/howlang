@@ -603,7 +603,11 @@ howlang/
       frontend.c              # AST list helpers (nl_push, sl_push, make_node, …)
       gc.c                    # GC state, value/env/map/list constructors, mark-sweep collector
       builtins.c              # Built-in functions and global environment setup
-      runtime.c               # Evaluator, module import, and public bootstrap/run API
+      runtime.c               # Core evaluator (eval/exec_stmt/exec_body/run_branches) and public API
+      ad.c                    # Automatic differentiation: reverse-mode tape, dual numbers, grad
+      call.c                  # Function/class invocation: eval_call_val, instantiate_class, run_loop
+      import.c                # Module search paths and module loading (exec_import)
+      parallel.c              # Parallel for-range loop ^{} via pthreads
       driver.c                # CLI entry point and REPL
     build/                    # CMake build output (gitignored)
   samples/
