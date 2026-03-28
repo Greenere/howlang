@@ -6,7 +6,6 @@
  *   how_add_import_dir(), find_how_file(), exec_import()
  */
 #include "runtime_internal.h"
-#include "frontend.h"
 #include <string.h>
 
 /* ── Import search path globals ──────────────────────────────────────────── */

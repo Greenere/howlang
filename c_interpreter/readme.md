@@ -47,7 +47,6 @@ c_interpreter/
   include/
     common.h            # Shared utilities: buffers, memory, error reporting, REPL state
     ast.h               # AST node types and structures
-    frontend.h          # Public parser API
     runtime.h           # Public runtime API
     lexer_internal.h    # Token types shared between lexer and parser (internal)
     runtime_internal.h  # Types, globals, and declarations shared across runtime, gc, builtins (internal)
@@ -55,7 +54,6 @@ c_interpreter/
     common.c            # Implementations of common utilities
     lexer.c             # Tokeniser
     parser.c            # Parser and AST construction
-    frontend.c          # AST list helpers (nl_push, sl_push, make_node, …)
     gc.c                # GC state, value/env/map/list constructors, mark-sweep collector
     builtins.c          # Built-in functions and global environment setup
     runtime.c           # Evaluator, module import, and public bootstrap/run API

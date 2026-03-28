@@ -1,4 +1,4 @@
-#include "frontend.h"
+#include "common.h"
 #include "lexer_internal.h"
 
 static void tl_push(TokenList *tl, Token t) {

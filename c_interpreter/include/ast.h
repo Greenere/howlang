@@ -70,5 +70,6 @@ struct Node {
 };
 
 Node *make_node(NodeType t, int line);
+Node *how_parse_source(const char *src);
 
 #endif

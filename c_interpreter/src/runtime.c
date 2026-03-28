@@ -1,6 +1,5 @@
 #include "runtime_internal.h"
 #include "runtime.h"
-#include "frontend.h"
 
 /* ── Globals owned by runtime.c ─────────────────────────────────────────── */
 
