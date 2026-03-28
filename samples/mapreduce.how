@@ -1,26 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# mapreduce.how  —  Map / Filter / Reduce in Howlang
+# mapreduce.how  —  Map / Filter / Reduce in Howlang  (parallel edition)
 #
 # Three implementations, from simple to expressive:
-#   1. Standalone functions
-#   2. Pipeline builder — reads left to right
-#   3. Parallel map-reduce over partitioned data
+#   1. Standalone functions  (map and filter use the ^ parallel clause)
+#   2. Pipeline builder      (reads left to right)
+#   3. Parallel map-reduce over partitioned data  (chunks mapped concurrently)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Core primitives ───────────────────────────────────────────────────────────
 
+# map_fn: evaluate f on every element concurrently; results keep original order
 var map_fn = (lst, f){
-    var out = list(),
-    (i=0:len(lst)){ push(out, f(lst(i))) }(),
-    :: out
+    :: (i=0:len(lst))^{ :: f(lst(i)) }()
 }
 
+# filter_fn: evaluate the predicate in parallel to build a mask, then collect
 var filter_fn = (lst, pred){
-    var out = list(),
-    (i=0:len(lst)){ pred(lst(i)): push(out, lst(i)) }(),
+    var mask = (i=0:len(lst))^{ :: pred(lst(i)) }(),
+    var out  = list(),
+    (i=0:len(lst)){ mask(i): push(out, lst(i)) }(),
     :: out
 }
 
+# reduce_fn: inherently sequential — left fold, cannot be parallelised directly
 var reduce_fn = (lst, f, init){
     var acc = init,
     (i=0:len(lst)){ acc = f(acc, lst(i)) }(),
@@ -93,10 +95,10 @@ print(run_pipeline(nums, {
 # 1×3×5×7×9 = 945
 
 
-# ── Part 3: Map-reduce over partitions ───────────────────────────────────────
-# Split data into chunks, map over each, then reduce the partial results.
-# Shows how the primitives compose into a distributed-style computation.
-print("─── Map-reduce over partitions ─────────────────────────────────────────")
+# ── Part 3: Parallel map-reduce over partitions ───────────────────────────────
+# Split data into chunks, then map over each chunk concurrently with ^{},
+# then reduce the partial results sequentially.
+print("─── Parallel map-reduce over partitions ────────────────────────────────")
 
 var chunk = (lst, size){
     var chunks = list(),
@@ -112,12 +114,12 @@ var chunk = (lst, size){
 }
 
 var mapreduce = (data, mapper, reducer, zero, chunk_size){
-    # Map phase: apply mapper to each chunk independently
-    var chunks  = chunk(data, chunk_size),
-    var partial = map_fn(chunks, (c){
-        :: reduce_fn(map_fn(c, mapper), reducer, zero)
-    }),
-    # Reduce phase: combine partial results
+    var chunks = chunk(data, chunk_size),
+    # Map phase: each chunk is processed independently — run them in parallel
+    var partial = (i=0:len(chunks))^{
+        :: reduce_fn(map_fn(chunks(i), mapper), reducer, zero)
+    }(),
+    # Reduce phase: combine partial results sequentially
     :: reduce_fn(partial, reducer, zero)
 }
 
@@ -145,3 +147,45 @@ print(mapreduce(
     2
 ))
 # longest word: "quick"=5, "brown"=5, "jumps"=5 → 5
+
+
+# ── Benchmark: sequential vs parallel ────────────────────────────────────────
+print("─── Benchmark ──────────────────────────────────────────────────────────")
+
+var map_seq = (lst, f){
+    var out = list(),
+    (i=0:len(lst)){ push(out, f(lst(i))) }(),
+    :: out
+}
+
+# ── CPU-bound: interpreter work hits a shared GC alloc lock ──────────────────
+# Every Value allocation takes g_alloc_mutex, so threads contend rather than
+# run in parallel.  Parallel is slower here — this is expected.
+var N_cpu = 500
+var data_cpu = range(N_cpu)
+var heavy = (x){
+    var s = 0,
+    (j=0:500){ s += j }(),
+    :: s
+}
+
+var t_seq_cpu = time((){ map_seq(data_cpu, heavy) })
+var t_par_cpu = time((){ map_fn(data_cpu, heavy)  })
+
+print("CPU-bound (n=" + str(N_cpu) + ", 500 inner iters/item) — GC lock contention expected:")
+print("  sequential: " + str(t_seq_cpu) + " ms")
+print("  parallel:   " + str(t_par_cpu) + " ms")
+
+# ── I/O-bound: run() uses fork() which macOS serialises at the kernel level ──
+# Expected: both sequential and parallel take N x 100ms here.
+# On a runtime with non-fork I/O (sockets, native async), threads would overlap.
+var N_io = 8
+var data_io = range(N_io)
+var slow_cmd = (x){ :: run("sleep 0.1") }
+
+var t_seq_io = time((){ map_seq(data_io, slow_cmd) })
+var t_par_io = time((){ map_fn(data_io, slow_cmd)  })
+
+print("I/O-bound (n=" + str(N_io) + " x sleep 0.1s) — fork() serialised on macOS:")
+print("  sequential: " + str(t_seq_io) + " ms")
+print("  parallel:   " + str(t_par_io) + " ms")

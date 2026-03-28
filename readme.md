@@ -379,6 +379,8 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `args()`                | List of command-line arguments                           |
 | `par(lst, fn)`          | Apply `fn` to each element of `lst` in parallel; returns result list |
 | `gc()`                  | Trigger a garbage collection cycle                       |
+| `time()`                | Current wall-clock time as milliseconds since Unix epoch                |
+| `time(fn)`              | Call `fn()` and return elapsed wall-clock milliseconds                  |
 | `cwd()`                 | Return the current working directory as a string         |
 | `run(cmd)`              | Execute a shell command; returns the exit code as a number |
 

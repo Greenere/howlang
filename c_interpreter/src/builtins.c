@@ -406,6 +406,31 @@ BUILTIN(gc_fn) {
     return val_none();
 }
 
+/* time()     — current wall-clock time as milliseconds since Unix epoch
+ * time(fn)   — call fn() with no args, return elapsed wall-clock ms      */
+BUILTIN(time_fn) {
+    struct timespec t;
+    if (argc == 0) {
+        clock_gettime(CLOCK_REALTIME, &t);
+        return val_num(t.tv_sec * 1e3 + t.tv_nsec * 1e-6);
+    }
+    NEED(1);
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    Signal sig = {SIG_NONE, NULL};
+    Value *res = eval_call_val(ARG(0), NULL, 0, &sig, 0);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    val_decref(res);
+    if (sig.type == SIG_ERROR) {
+        char *s = sig.retval ? val_repr(sig.retval) : xstrdup("error");
+        if (sig.retval) val_decref(sig.retval);
+        die("time(): %s", s);
+    }
+    if (sig.type == SIG_RETURN && sig.retval) val_decref(sig.retval);
+    return val_num((t1.tv_sec - t.tv_sec) * 1e3
+                 + (t1.tv_nsec - t.tv_nsec) * 1e-6);
+}
+
 /* _host_call(fn, args_list) — call a native host function with a HowList of args */
 BUILTIN(host_call_fn) {
     NEED(2);
@@ -585,6 +610,7 @@ void setup_globals(Env *env) {
     REG("min",     min_fn);
     REG("quit",    quit_fn);
     REG("gc",      gc_fn);
+    REG("time",    time_fn);
     REG("par",     par_fn);
     REG("_host_call",      host_call_fn);
     REG("_basename", basename_fn);
