@@ -122,6 +122,55 @@ BUILTIN(sqrt_fn) {
     }
     return val_num(sqrt(ARG(0)->nval));
 }
+BUILTIN(sin_fn) {
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) {
+        double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
+        return val_dual(sin(v), cos(v)*t);
+    }
+    return val_num(sin(ARG(0)->nval));
+}
+BUILTIN(cos_fn) {
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) {
+        double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
+        return val_dual(cos(v), -sin(v)*t);
+    }
+    return val_num(cos(ARG(0)->nval));
+}
+BUILTIN(exp_fn) {
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) {
+        double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
+        double ev=exp(v);
+        return val_dual(ev, ev*t);
+    }
+    return val_num(exp(ARG(0)->nval));
+}
+BUILTIN(log_fn) {
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) {
+        double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
+        if (v<=0.0) die("log() of non-positive value");
+        return val_dual(log(v), t/v);
+    }
+    if (ARG(0)->nval<=0.0) die("log() of non-positive value");
+    return val_num(log(ARG(0)->nval));
+}
+BUILTIN(pow_fn) {
+    NEED(2);
+    double base = ARG(0)->type==VT_DUAL ? ARG(0)->dual.val : ARG(0)->nval;
+    double exp_ = ARG(1)->type==VT_DUAL ? ARG(1)->dual.val : ARG(1)->nval;
+    if (ARG(0)->type==VT_DUAL || ARG(1)->type==VT_DUAL) {
+        double v  = pow(base, exp_);
+        double dt = ARG(0)->type==VT_DUAL ? ARG(0)->dual.tan : 0.0;
+        double de = ARG(1)->type==VT_DUAL ? ARG(1)->dual.tan : 0.0;
+        double t  = (base > 0.0 ? exp_*pow(base, exp_-1.0)*dt + v*log(base)*de
+                                : exp_*pow(base, exp_-1.0)*dt);
+        return val_dual(v, t);
+    }
+    return val_num(pow(base, exp_));
+}
 
 BUILTIN(list_fn) {
     HowList *l = list_new();
@@ -629,6 +678,11 @@ void setup_globals(Env *env) {
     REG("ceil",    ceil_fn);
     REG("abs",     abs_fn);
     REG("sqrt",    sqrt_fn);
+    REG("sin",     sin_fn);
+    REG("cos",     cos_fn);
+    REG("exp",     exp_fn);
+    REG("log",     log_fn);
+    REG("pow",     pow_fn);
     REG("list",    list_fn);
     REG("map",     map_fn);
     REG("push",    push_fn);
@@ -664,5 +718,7 @@ void setup_globals(Env *env) {
     Value *t = val_bool(1); env_set(env,"true",t); val_decref(t);
     Value *f = val_bool(0); env_set(env,"false",f); val_decref(f);
     Value *n = val_none(); env_set(env,"none",n); val_decref(n);
+    /* math constants */
+    Value *pi_v = val_num(3.14159265358979323846); env_set(env,"pi",pi_v); val_decref(pi_v);
 #undef REG
 }

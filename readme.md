@@ -372,6 +372,12 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `floor(n)`              | Floor                                                    |
 | `ceil(n)`               | Ceiling                                                  |
 | `sqrt(n)`               | Square root                                              |
+| `sin(n)`                | Sine (radians)                                           |
+| `cos(n)`                | Cosine (radians)                                         |
+| `exp(n)`                | Natural exponential eⁿ                                   |
+| `log(n)`                | Natural logarithm ln(n)                                  |
+| `pow(base, exp)`        | Power: baseᵉˣᵖ                                           |
+| `pi`                    | The constant π ≈ 3.14159… (a value, not a function)      |
 | `max(...)` / `min(...)` | Max/min of args or a single list                         |
 | `ask(prompt)`           | Print prompt and read a line from stdin                  |
 | `read(path)`            | Read entire file as a string                             |
@@ -617,8 +623,8 @@ HOW=./c_interpreter/build/howlang
 
 $HOW samples/tests/test_all.how          # 54/54 passed
 $HOW samples/tests/test_loops.how        # 41/41 passed
-$HOW samples/tests/test_parallel.how     # 31/31 passed
-$HOW samples/tests/test_grad.how         # 19/19 passed
+$HOW samples/tests/test_parallel.how     # 132/132 passed
+$HOW samples/tests/test_grad.how         # 91/91 passed
 
 cd samples
 ../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34 passed

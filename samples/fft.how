@@ -1,0 +1,197 @@
+# fft.how — Cooley-Tukey radix-2 DIT FFT in Howlang
+#
+# Complex numbers are represented as 2-element lists {re, im}.
+# The recursive divide-and-conquer algorithm runs in O(N log N).
+#
+# Exports (used by cnn.how for frequency-domain convolution):
+#   fft(x)     — forward FFT,  x is a list of {re, im} pairs, N must be a power of 2
+#   ifft(x)    — inverse FFT,  same shape
+#   fft_real(r)— convenience: wrap a real list as complex, run FFT
+#   conv_fft(a, b) — linear convolution of two real sequences via FFT
+
+
+# ── Complex arithmetic ────────────────────────────────────────────────────
+
+var cadd = (a, b){ :: {a(0)+b(0), a(1)+b(1)} }
+var csub = (a, b){ :: {a(0)-b(0), a(1)-b(1)} }
+var cmul = (a, b){
+    :: {a(0)*b(0) - a(1)*b(1),
+        a(0)*b(1) + a(1)*b(0)}
+}
+var cconj = (a){ :: {a(0), -a(1)} }
+var cscale = (a, s){ :: {a(0)*s, a(1)*s} }
+
+# twiddle factor: e^(i*theta) = {cos(theta), sin(theta)}
+var cis = (theta){ :: {cos(theta), sin(theta)} }
+
+
+# ── Cooley-Tukey radix-2 DIT (recursive) ─────────────────────────────────
+#
+# Input:  list of N complex numbers ({re, im}), N a power of 2
+# Output: list of N complex frequency bins
+
+var fft = (x){
+    var n = len(x)
+    n == 1 :: x,
+
+    # Split into even-indexed and odd-indexed sub-sequences
+    var even = list()
+    var odd  = list()
+    (k=0:n/2){
+        push(even, x(2*k))
+        push(odd,  x(2*k+1))
+    }()
+
+    var E = fft(even)
+    var O = fft(odd)
+
+    # Combine — butterfly
+    var lo = list()
+    var hi = list()
+    (k=0:n/2){
+        var w   = cis(-2 * pi * k / n)
+        var wOk = cmul(w, O(k))
+        push(lo, cadd(E(k), wOk))
+        push(hi, csub(E(k), wOk))
+    }()
+
+    var out = list()
+    (k=0:n/2){ push(out, lo(k)) }()
+    (k=0:n/2){ push(out, hi(k)) }()
+    :: out
+}
+
+
+# ── Inverse FFT ───────────────────────────────────────────────────────────
+#
+# ifft(x) = conj(fft(conj(x))) / N
+
+var ifft = (x){
+    var n = len(x)
+    # conjugate input
+    var xc = list()
+    (k=0:n){ push(xc, cconj(x(k))) }()
+    # forward FFT
+    var F = fft(xc)
+    # conjugate output and scale by 1/N
+    var out = list()
+    (k=0:n){ push(out, cscale(cconj(F(k)), 1.0/n)) }()
+    :: out
+}
+
+
+# ── Convenience: real → complex → FFT ────────────────────────────────────
+
+var fft_real = (r){
+    var x = list()
+    (k=0:len(r)){ push(x, {r(k), 0}) }()
+    :: fft(x)
+}
+
+
+# ── Next power of 2 ───────────────────────────────────────────────────────
+
+var next_pow2_aux = (n, p){
+    p >= n :: p,
+    :: next_pow2_aux(n, p * 2)
+}
+var next_pow2 = (n){ :: next_pow2_aux(n, 1) }
+
+
+# ── Zero-pad list to length target ───────────────────────────────────────
+
+var zeropad = (x, target){
+    var out = list()
+    (i=0:len(x)){ push(out, x(i)) }()
+    (i=len(x):target){ push(out, 0) }()
+    :: out
+}
+
+
+# ── Linear convolution via FFT ────────────────────────────────────────────
+#
+# Returns the full linear convolution of real sequences a and b.
+# Length of result = len(a) + len(b) - 1.
+
+var conv_fft = (a, b){
+    var out_len = len(a) + len(b) - 1
+    var fft_len = next_pow2(out_len)
+
+    var A = fft_real(zeropad(a, fft_len))
+    var B = fft_real(zeropad(b, fft_len))
+
+    # Point-wise multiply in frequency domain
+    var AB = list()
+    (k=0:fft_len){ push(AB, cmul(A(k), B(k))) }()
+
+    # IFFT and take real part
+    var ab = ifft(AB)
+    var out = list()
+    (k=0:out_len){ push(out, ab(k)(0)) }()
+    :: out
+}
+
+
+# ── Demo ──────────────────────────────────────────────────────────────────
+
+print("═══ FFT demo ═══")
+print("")
+
+# 1. FFT of a pure cosine: x[n] = cos(2π·k₀·n/N)
+#    Should give spikes at bins k₀ and N-k₀, zero elsewhere.
+
+var N  = 8
+var k0 = 2   # target frequency bin
+
+var x_cos = list()
+(n=0:N){ push(x_cos, {cos(2 * pi * k0 * n / N), 0}) }()
+
+var X = fft(x_cos)
+
+print("FFT of cos(2π·2·n/8)  — expect spikes at bins 2 and 6:")
+(k=0:N){
+    var mag = sqrt(X(k)(0)*X(k)(0) + X(k)(1)*X(k)(1))
+    print("  bin " + str(k) + "  |X| = " + str(mag))
+}()
+print("")
+
+# 2. Round-trip: signal → FFT → IFFT → signal
+print("Round-trip test  (FFT then IFFT should recover original):")
+var signal = {3, -1, 4, 1, 5, -9, 2, 6}
+var S = fft_real(signal)
+var s_back = ifft(S)
+var max_err = 0
+(k=0:N){
+    var err = abs(s_back(k)(0) - signal(k))
+    max_err > err :: none, :: max_err = err
+}()
+print("  max reconstruction error = " + str(max_err))
+print("")
+
+# 3. Linear convolution via FFT vs direct convolution
+print("Convolution via FFT:")
+var a_sig = {1, 2, 3}
+var b_sig = {1, -1, 1}
+var c_fft = conv_fft(a_sig, b_sig)
+
+# Direct O(N·M) for verification
+var c_direct = list()
+(k=0:len(a_sig)+len(b_sig)-1){ push(c_direct, 0.0) }()
+(i=0:len(a_sig)){
+    (j=0:len(b_sig)){
+        set_key(c_direct, i+j, c_direct(i+j) + a_sig(i)*b_sig(j))
+    }()
+}()
+
+print("  a = " + str(a_sig))
+print("  b = " + str(b_sig))
+print("  conv_fft    = " + str(c_fft))
+print("  conv_direct = " + str(c_direct))
+var conv_err = 0
+(k=0:len(c_fft)){
+    var e = abs(c_fft(k) - c_direct(k))
+    conv_err > e :: none, :: conv_err = e
+}()
+print("  max error = " + str(conv_err))
+print("")
+print("Done.")

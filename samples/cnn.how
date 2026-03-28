@@ -1,0 +1,404 @@
+# cnn.how — 1D Convolutional Neural Network using grad() for activation derivatives
+#
+# Architecture:
+#   input(8) → Conv1D(4 filters, kernel=3, valid) → 6 outputs/filter
+#           → ReLU
+#           → GlobalAvgPool → 4 features
+#           → Dense(4→1) → Sigmoid
+#
+# Task:  "first-half dominant" binary classification
+#   label=1 if sum of first 4 samples > sum of last 4 samples
+#   label=0 otherwise
+#
+# Key CNN concepts demonstrated:
+#   • Weight sharing — one kernel applied at every time-step
+#   • Local connectivity — each output depends on 3 adjacent inputs
+#   • grad() — used for activation derivatives (no hand-written gradients)
+#   • Full backprop through Conv1D, ReLU, GlobalAvgPool, and Dense
+
+
+# ── Scalar activations (identical to mlp.how) ─────────────────────────────
+
+var relu_s = (x){
+    x > 0 :: x,
+    :: 0
+} grad (x, g){
+    x > 0 :: g,
+    :: 0
+}
+var d_relu = grad(relu_s)
+
+var sigmoid_s = (x){ :: 0.5 + 0.5 * x / (1 + abs(x)) }
+var d_sigmoid  = grad(sigmoid_s)
+
+
+# ── Vector / matrix helpers ───────────────────────────────────────────────
+
+var dot = (a, b){
+    var s = 0
+    (i=0:len(a)){ s += a(i) * b(i) }()
+    :: s
+}
+
+var vadd   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)+b(i)) }(), :: o }
+var vsub   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)-b(i)) }(), :: o }
+var vmul   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)*b(i)) }(), :: o }
+var vscale = (v, s){ var o=list(), (i=0:len(v)){ push(o, v(i)*s) }(), :: o }
+
+var matvec = (W, x){
+    var o = list()
+    (i=0:len(W)){ push(o, dot(W(i), x)) }()
+    :: o
+}
+
+var matvec_T = (W, v){
+    var n_cols = len(W(0))
+    var o = list()
+    (j=0:n_cols){
+        var s = 0
+        (i=0:len(W)){ s += W(i)(j) * v(i) }()
+        push(o, s)
+    }()
+    :: o
+}
+
+var outer = (a, b){
+    var mat = list()
+    (i=0:len(a)){
+        var row = list()
+        (j=0:len(b)){ push(row, a(i) * b(j)) }()
+        push(mat, row)
+    }()
+    :: mat
+}
+
+var matsub = (A, B){
+    var o = list()
+    (i=0:len(A)){
+        var r = list()
+        (j=0:len(A(i))){ push(r, A(i)(j) - B(i)(j)) }()
+        push(o, r)
+    }()
+    :: o
+}
+
+var matscale = (M, s){
+    var o = list()
+    (i=0:len(M)){
+        var r = list()
+        (j=0:len(M(i))){ push(r, M(i)(j) * s) }()
+        push(o, r)
+    }()
+    :: o
+}
+
+
+# ── Conv1D layer ──────────────────────────────────────────────────────────
+#
+# kernels : list of n_filters lists, each of length kernel_size
+# bias    : list of n_filters scalars
+#
+# forward(x)  → feature_maps: list of n_filters lists, each of length T_out
+#               where T_out = len(x) - kernel_size + 1  (valid / no padding)
+#
+# backward(grad_maps, lr)  → grad_x (gradient w.r.t. input)
+#   dL/dkernel[f][k] = Σ_t  grad_maps[f][t] * x[t+k]         (cross-correlation)
+#   dL/dx[t]         = Σ_f Σ_k  grad_maps[f][t-k] * kernel[f][k]  (full convolution)
+
+var Conv1D = [kernels, bias]{
+    kernels: kernels,
+    bias:    bias,
+    x_saved: list(),   # input saved during forward pass (needed for backward)
+
+    forward: (x){
+        x_saved = x,
+        var nf     = len(kernels)
+        var ks     = len(kernels(0))
+        var T      = len(x)
+        var T_out  = T - ks + 1
+        var maps   = list()
+        (f=0:nf){
+            var row = list()
+            (t=0:T_out){
+                var s = bias(f)
+                (k=0:ks){ s += kernels(f)(k) * x(t+k) }()
+                push(row, s)
+            }()
+            push(maps, row)
+        }()
+        :: maps
+    },
+
+    backward: (grad_maps, lr){
+        var nf    = len(kernels)
+        var ks    = len(kernels(0))
+        var T     = len(x_saved)
+        var T_out = T - ks + 1
+
+        # Update kernels and biases
+        (f=0:nf){
+            var new_k = list()
+            (k=0:ks){
+                var dk = 0
+                (t=0:T_out){ dk += grad_maps(f)(t) * x_saved(t+k) }()
+                push(new_k, kernels(f)(k) - lr * dk)
+            }()
+            set_key(kernels, f, new_k)
+
+            var db = 0
+            (t=0:T_out){ db += grad_maps(f)(t) }()
+            set_key(bias, f, bias(f) - lr * db)
+        }()
+
+        # Gradient w.r.t. input (full convolution with flipped kernel)
+        var grad_x = list()
+        (t=0:T){
+            var dx = 0
+            (f=0:nf){
+                (k=0:ks){
+                    var t_src = t - k
+                    t_src >= 0 && t_src < T_out: dx += grad_maps(f)(t_src) * kernels(f)(k)
+                }()
+            }()
+            push(grad_x, dx)
+        }()
+        :: grad_x
+    }
+}
+
+
+# ── ReLU over a feature-map tensor ───────────────────────────────────────
+#
+# Applies relu_s element-wise to a list-of-lists (feature maps).
+# Saves pre-activation for backward pass.
+
+var ReLUMaps = []{
+    z_saved: list(),   # pre-activation feature maps
+
+    forward: (maps){
+        z_saved = maps,
+        var out = list()
+        (f=0:len(maps)){
+            var row = list()
+            (t=0:len(maps(f))){ push(row, relu_s(maps(f)(t))) }()
+            push(out, row)
+        }()
+        :: out
+    },
+
+    backward: (grad_out){
+        # grad w.r.t. pre-activation = grad_out * relu'(z)
+        var out = list()
+        (f=0:len(z_saved)){
+            var row = list()
+            (t=0:len(z_saved(f))){ push(row, d_relu(z_saved(f)(t)) * grad_out(f)(t)) }()
+            push(out, row)
+        }()
+        :: out
+    }
+}
+
+
+# ── GlobalAvgPool ─────────────────────────────────────────────────────────
+#
+# Reduces each filter's time axis to a single scalar (the mean).
+# forward : list-of-lists  →  flat list  (length = n_filters)
+# backward: flat gradient  →  list-of-lists (distribute uniformly)
+
+var GlobalAvgPool = []{
+    t_len_saved: list(),   # saved temporal lengths for backward
+
+    forward: (maps){
+        t_len_saved = list(),
+        var out = list()
+        (f=0:len(maps)){
+            push(t_len_saved, len(maps(f)))
+            var s = 0
+            (t=0:len(maps(f))){ s += maps(f)(t) }()
+            push(out, s / len(maps(f)))
+        }()
+        :: out
+    },
+
+    backward: (grad_vec){
+        var out = list()
+        (f=0:len(grad_vec)){
+            var T = t_len_saved(f)
+            var row = list()
+            (t=0:T){ push(row, grad_vec(f) / T) }()
+            push(out, row)
+        }()
+        :: out
+    }
+}
+
+
+# ── Dense layer (scalar output) ───────────────────────────────────────────
+#
+# W : list of 1 row (output_size=1), each row has length input_size
+# b : list of 1 scalar bias
+
+var Dense = [W, b]{
+    W:      W,
+    b:      b,
+    z:      list(),
+    h:      list(),
+
+    forward: (x){
+        z = vadd(matvec(W, x), b),
+        var out = list()
+        (i=0:len(z)){ push(out, sigmoid_s(z(i))) }()
+        h = out,
+        :: h
+    },
+
+    backward: (grad_h, x_in, lr){
+        var dz = list()
+        (i=0:len(z)){ push(dz, d_sigmoid(z(i))) }()
+        var grad_z = vmul(grad_h, dz)
+        var grad_x = matvec_T(W, grad_z)
+        W = matsub(W, matscale(outer(grad_z, x_in), lr))
+        b = vsub(b, vscale(grad_z, lr))
+        :: grad_x
+    }
+}
+
+
+# ── CNN model ─────────────────────────────────────────────────────────────
+
+var CNN = [conv, relu, pool, dense]{
+    conv:  conv,
+    relu:  relu,
+    pool:  pool,
+    dense: dense,
+
+    forward: (x){
+        var maps  = conv.forward(x)
+        var acts  = relu.forward(maps)
+        var vec   = pool.forward(acts)
+        :: dense.forward(vec)
+    },
+
+    train_step: (x, target, lr){
+        # Forward
+        var maps  = conv.forward(x)
+        var acts  = relu.forward(maps)
+        var vec   = pool.forward(acts)
+        var out   = dense.forward(vec)
+
+        # MSE loss
+        var y    = out(0)
+        var loss = (y - target) * (y - target)
+
+        # Backward
+        var g_out   = {2 * (y - target)}          # dL/d(out) shape [1]
+        var g_vec   = dense.backward(g_out, vec, lr)
+        var g_acts  = pool.backward(g_vec)
+        var g_maps  = relu.backward(g_acts)
+        conv.backward(g_maps, lr),
+
+        :: loss
+    }
+}
+
+
+# ── Initial weights ───────────────────────────────────────────────────────
+#
+# Conv1D: 4 filters of kernel_size=3.  Small hand-set values.
+
+var W_conv = {
+    { 1.0,  19, -1.0},   # filter 0 — forward difference
+    {-1.0,  -10,  1.0},   # filter 1 — backward difference
+    { 0.5,  1.0,  0.5},   # filter 2 — smoothing
+    { 1.0, -2.0,  1.0}    # filter 3 — second derivative
+}
+var b_conv = {0.0, 0.0, 0.0, 0.0}
+
+# Dense: 1 output neuron, 4 inputs
+var W_dense = {{ 1.0, -1.0, 0.5, -0.5}}
+var b_dense = {0.0}
+
+
+# ── Training data ─────────────────────────────────────────────────────────
+#
+# 8 examples; label = 1 if first-half mean > second-half mean.
+
+var inputs = {
+    { 2.0,  1.0,  2.0,  1.0, -1.0, -2.0, -1.0, -2.0},   # first half +, label 1
+    {-2.0, -1.0, -2.0, -1.0,  1.0,  2.0,  1.0,  2.0},   # second half +, label 0
+    { 1.0,  3.0,  1.0,  3.0,  0.0,  0.0,  0.0,  0.0},   # large first half, label 1
+    { 0.0,  0.0,  0.0,  0.0,  1.0,  3.0,  1.0,  3.0},   # large second half, label 0
+    { 0.5,  1.5,  0.5,  1.5, -0.5, -1.5, -0.5, -1.5},   # moderate first, label 1
+    {-0.5, -1.5, -0.5, -1.5,  0.5,  1.5,  0.5,  1.5},   # moderate second, label 0
+    { 3.0,  0.0,  3.0,  0.0, -3.0,  0.0, -3.0,  0.0},   # sparse first, label 1
+    {-3.0,  0.0, -3.0,  0.0,  3.0,  0.0,  3.0,  0.0}    # sparse second, label 0
+}
+var targets = {1, 0, 1, 0, 1, 0, 1, 0}
+
+
+# ── Instantiate the model ─────────────────────────────────────────────────
+
+var net = CNN[
+    Conv1D[W_conv, b_conv],
+    ReLUMaps[],
+    GlobalAvgPool[],
+    Dense[W_dense, b_dense]
+]
+
+
+# ── Helper: print current predictions ────────────────────────────────────
+
+var show_predictions = (){
+    print("  idx  target  output    correct?")
+    print("  ─────────────────────────────────")
+    (i=0:len(inputs)){
+        var out = net.forward(inputs(i))
+        var y   = out(0)
+        var ok  = (y > 0.5) == (targets(i) == 1)
+        print("  " + str(i) + "      " + str(targets(i)) + "       " + str(y) + "   " + str(ok))
+    }()
+}
+
+var count_correct = (){
+    var n = 0
+    (i=0:len(inputs)){
+        var out = net.forward(inputs(i))
+        var y   = out(0)
+        (y > 0.5) == (targets(i) == 1): n += 1
+    }()
+    :: n
+}
+
+
+# ── Training loop ─────────────────────────────────────────────────────────
+
+print("═══ 1D CNN — first-half dominant classifier ═══")
+print("")
+print("Architecture: Conv1D(4 filters, k=3) → ReLU → GlobalAvgPool → Dense(4→1) → Sigmoid")
+print("")
+print("Before training:")
+show_predictions()
+print("")
+
+var lr     = 0.02
+var epochs = 3000
+
+print("Training  (epochs=" + str(epochs) + "  lr=" + str(lr) + ")")
+print("")
+
+var start = time()
+(epoch=0:epochs){
+    var total_loss = 0
+    (i=0:len(inputs)){
+        total_loss += net.train_step(inputs(i), targets(i), lr)
+    }()
+    epoch % 300 == 0: print("At " +str(time()-start)+"ms  epoch " + str(epoch) + "  loss=" + str(total_loss) + "  correct=" + str(count_correct()) + "/" + str(len(inputs)))
+}()
+print("")
+print("Training time: " + str(time() - start) + " ms")
+print("")
+
+print("After training:")
+show_predictions()
+print("")
+print("Final accuracy: " + str(count_correct()) + "/" + str(len(inputs)))

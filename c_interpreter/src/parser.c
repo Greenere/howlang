@@ -320,7 +320,11 @@ static Node *parse_branch(Parser *p) {
         }
     }
 
-    if (p_check(p, TT_DCOLON)) {
+    /* `::` is only a conditional-return operator when it appears on the same
+       line as the condition expression it follows.  A `::` that appears on a
+       fresh line is an unconditional return and will be handled the next time
+       parse_branch is called — just like `!!` (see the TT_DBANG check above). */
+    if (p_check(p, TT_DCOLON) && p_peek(p,0)->line == cond->line) {
         p_adv(p);
         Node *body = parse_expr(p);
         Node *n = make_node(N_BRANCH, line);
