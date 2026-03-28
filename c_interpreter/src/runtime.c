@@ -41,6 +41,7 @@ char *find_how_file(const char *name) {
 
 static Value *eval(Node *node, Env *env, Signal *sig);
 Value        *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line);
+static Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc, Signal *sig, int line);
 static void   run_branches(NodeList *branches, Env *env, Signal *sig);
 static void   run_loop(HowFunc *fn, Signal *sig);
 static Value *run_parallel_loop(HowFunc *fn, Signal *sig);
@@ -243,6 +244,142 @@ Value *compute_grad_closure(Value *primal_fn, Signal *sig) {
     return gval;
 }
 
+/* call_custom_grad — evaluates grad(f)(args...) when f has a user-defined
+ * grad block.
+ *
+ * Algorithm (per grad_fix_proposal.md):
+ *   1. Reset tape; assign tape IDs to every numeric arg.
+ *   2. Run the forward pass with tape active to record all operations.
+ *   3. Seed the output gradient = 1.0 and run tape_backward().
+ *   4. Call the grad block with (primals..., g=1.0).
+ *   5. Build result map keyed by param name:
+ *        - if grad block returned a non-none value for this param → use it
+ *        - else if the arg was numeric → use tape-computed gradient
+ *        - else (function param, omitted) → none
+ *   6. For single-numeric-arg calls: unwrap map to plain number.
+ */
+static Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
+                               Signal *sig, int line) {
+    HowFunc *cgfn = primal_fn->grad_fn;
+    int n = argc;
+
+    /* Higher-order grad: if any arg is a dual number (forward-mode nesting),
+     * the tape cannot track dual tangents.  Fall back to calling the grad block
+     * directly so dual arithmetic propagates through it correctly.
+     * This is the path that makes grad(grad(f)) work for old-style grad blocks. */
+    for (int i = 0; i < n; i++) {
+        if (args[i]->type == VT_DUAL) {
+            Value **gargs = xmalloc((size_t)(n + 1) * sizeof(Value *));
+            for (int j = 0; j < n; j++) gargs[j] = args[j];
+            gargs[n] = val_num(1.0);
+            Value *cgfn_wrap = val_new(VT_FUNC);
+            cgfn_wrap->func = cgfn; cgfn->refcount++;
+            GC_ROOT_VALUE(cgfn_wrap);
+            Value *gres = eval_call_val(cgfn_wrap, gargs, n + 1, sig, line);
+            GC_UNROOT_VALUE(); cgfn->refcount--; val_decref(cgfn_wrap);
+            val_decref(gargs[n]);
+            free(gargs);
+            return gres;
+        }
+    }
+
+    /* Save primal values before any tape wrapping */
+    Value **primals = xmalloc((size_t)n * sizeof(Value *));
+    for (int i = 0; i < n; i++) primals[i] = val_incref(args[i]);
+
+    /* Reset tape; assign tape IDs to numeric args */
+    g_tape_len = 0; g_tape_next_id = 0;
+    if (g_tape_vsize > 0)
+        memset(g_tape_grads, 0, (size_t)g_tape_vsize * sizeof(double));
+
+    int    *arg_ids   = xmalloc((size_t)n * sizeof(int));
+    Value **tape_args = xmalloc((size_t)n * sizeof(Value *));
+    for (int i = 0; i < n; i++) {
+        if (args[i]->type == VT_NUM) {
+            arg_ids[i]   = g_tape_next_id;         /* record before tape_new_val bumps it */
+            tape_args[i] = tape_new_val(args[i]->nval);
+        } else {
+            arg_ids[i]   = -1;
+            tape_args[i] = val_incref(args[i]);     /* non-numeric: pass through */
+        }
+    }
+
+    /* Forward pass with tape */
+    Value *pfn_wrap = val_new(VT_FUNC);
+    pfn_wrap->func = primal_fn; primal_fn->refcount++;
+    GC_ROOT_VALUE(pfn_wrap);
+    g_tape_active = 1;
+    Signal fwd_sig = {SIG_NONE, NULL};
+    Value *fwd = eval_call_val(pfn_wrap, tape_args, n, &fwd_sig, line);
+    g_tape_active = 0;
+    GC_UNROOT_VALUE(); primal_fn->refcount--; val_decref(pfn_wrap);
+    for (int i = 0; i < n; i++) val_decref(tape_args[i]);
+    free(tape_args);
+
+    /* Seed output gradient and run backward pass */
+    if (fwd_sig.type == SIG_NONE && fwd && IS_TAPE_VAL(fwd)) {
+        int out_id = TAPE_ID(fwd);
+        if (out_id < g_tape_vsize) g_tape_grads[out_id] = 1.0;
+        tape_backward();
+    }
+    if (fwd_sig.retval) val_decref(fwd_sig.retval);
+    if (fwd) val_decref(fwd);
+
+    /* Call the grad block with (primals..., g=1.0) */
+    Value **grad_args = xmalloc((size_t)(n + 1) * sizeof(Value *));
+    for (int i = 0; i < n; i++) grad_args[i] = primals[i];
+    grad_args[n] = val_num(1.0);
+
+    Value *cgfn_wrap = val_new(VT_FUNC);
+    cgfn_wrap->func = cgfn; cgfn->refcount++;
+    GC_ROOT_VALUE(cgfn_wrap);
+    Value *override_map = eval_call_val(cgfn_wrap, grad_args, n + 1, sig, line);
+    GC_UNROOT_VALUE(); cgfn->refcount--; val_decref(cgfn_wrap);
+    val_decref(grad_args[n]);   /* release g=1.0 */
+    free(grad_args);
+
+    /* Treat non-map return (or error) as empty override */
+    if (!override_map || override_map->type != VT_MAP) {
+        if (override_map) val_decref(override_map);
+        override_map = NULL;
+    }
+
+    /* Build result map: override wins; tape fills omitted numeric params */
+    HowMap *result = map_new();
+    Value  *rval   = val_map(result); map_decref(result);
+    GC_ROOT_VALUE(rval);
+
+    for (int i = 0; i < n && i < primal_fn->params.len; i++) {
+        const char *pname = primal_fn->params.s[i];
+        Value *override = override_map ? map_get(override_map->map, pname) : NULL;
+
+        Value *gv;
+        if (override && override->type != VT_NONE) {
+            gv = val_incref(override);                          /* explicit override */
+        } else if (arg_ids[i] >= 0 && arg_ids[i] < g_tape_vsize) {
+            gv = val_num(g_tape_grads[arg_ids[i]]);             /* tape-computed */
+        } else {
+            gv = val_none();                                    /* function param */
+        }
+        map_set(rval->map, pname, gv);
+        val_decref(gv);
+    }
+
+    for (int i = 0; i < n; i++) val_decref(primals[i]);
+    free(primals); free(arg_ids);
+    if (override_map) val_decref(override_map);
+    GC_UNROOT_VALUE();
+
+    /* Single numeric arg: unwrap map to a plain number for ergonomics */
+    if (n == 1 && args[0]->type == VT_NUM && primal_fn->params.len >= 1) {
+        Value *gv = map_get(rval->map, primal_fn->params.s[0]);
+        Value *ret = (gv && gv->type == VT_NUM) ? val_num(gv->nval) : val_none();
+        val_decref(rval);
+        return ret;
+    }
+    return rval;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Interpreter core                                                            */
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -344,7 +481,7 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
                 return res;
             }
         }
-        Value *res;
+        Value *res = NULL;
         if (!strcmp(op,"+")) {
             if (l->type==VT_LIST && r->type==VT_LIST) {
                 HowList *nl=list_new();
@@ -966,24 +1103,9 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
             Value *primal_v = env_get(fn->closure, "__primal__");
             if (!primal_v) die_at(line, 0, "grad wrapper lost its primal");
 
-            /* Custom grad block */
+            /* Custom grad block: run tape + merge with grad block overrides */
             if (primal_v->type==VT_FUNC && primal_v->func->grad_fn) {
-                HowFunc *cgfn = primal_v->func->grad_fn;
-                Value **gargs = xmalloc((size_t)(argc + 1) * sizeof(Value*));
-                for (int i=0; i<argc; i++) gargs[i] = args[i];
-                Value *g_up = val_num(1.0);
-                gargs[argc] = g_up;
-                /* Wrap cgfn in a temporary Value (cgfn already in g_all_funcs) */
-                Value *gfn_wrap = val_new(VT_FUNC);
-                gfn_wrap->func = cgfn; cgfn->refcount++;
-                GC_ROOT_VALUE(gfn_wrap);
-                Value *gres = eval_call_val(gfn_wrap, gargs, argc+1, sig, line);
-                GC_UNROOT_VALUE();
-                cgfn->refcount--;
-                val_decref(gfn_wrap);
-                val_decref(g_up);
-                free(gargs);
-                return gres;
+                return call_custom_grad(primal_v->func, args, argc, sig, line);
             }
 
             /* Zero-arg closure: reverse-mode */
@@ -1305,6 +1427,7 @@ Env *local = env_new(fn->closure);
 
 /* Class instantiation */
 static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig) {
+    UNUSED(sig);
     if (argc != cls->params.len)
         die("class expects %d args but got %d", cls->params.len, argc);
 

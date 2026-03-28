@@ -9,8 +9,6 @@
 
 /* ── Static helpers ──────────────────────────────────────────────────────── */
 
-static char *args_argv0 = NULL;  /* set in main */
-
 static void write_value_to_path(const char *path, Value *v) {
     FILE *f = fopen(path, "w");
     if (!f) die("write(): cannot open '%s' for writing: %s", path, strerror(errno));
@@ -179,6 +177,7 @@ BUILTIN(list_fn) {
 }
 
 BUILTIN(map_fn) {
+    UNUSED(argc); UNUSED(argv);
     HowMap *m = map_new();
     Value *v = val_map(m); map_decref(m); return v;
 }
@@ -326,6 +325,7 @@ BUILTIN(write_fn) {
 }
 
 BUILTIN(args_fn) {
+    UNUSED(argc); UNUSED(argv);
     /* argv is set in main */
     return val_incref(env_get(g_globals,"__args"));
 }

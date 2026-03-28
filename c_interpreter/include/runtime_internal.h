@@ -133,7 +133,7 @@ typedef struct { SigType type; Value *retval; } Signal;
 
 /* ── Builtin helpers ─────────────────────────────────────────────────────── */
 
-#define BUILTIN(name) Value *builtin_##name(int argc, Value **argv, void *ctx)
+#define BUILTIN(name) Value *builtin_##name(int argc, Value **argv, void *ctx __attribute__((unused)))
 #define NEED(n) do{ if(argc<(n)) die("builtin requires %d args, got %d",(n),argc); }while(0)
 #define ARG(i)  (argc>(i) ? argv[i] : V_NONE_SINGLETON)
 

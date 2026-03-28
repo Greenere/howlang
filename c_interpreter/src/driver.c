@@ -2,7 +2,6 @@
 #include <termios.h>
 
 /* ── REPL line editor with history (no readline dependency) ─────────────── */
-#include <termios.h>
 
 #define REPL_HIST_MAX 500
 #define REPL_LINE_MAX 4096
@@ -133,10 +132,12 @@ static int repl_readline(const char *prompt, char *buf, int maxlen) {
             if (hist_idx == repl_hist_len) {
                 /* Save current line before browsing */
                 strncpy(saved, line, REPL_LINE_MAX-1);
+                saved[REPL_LINE_MAX-1] = '\0';
             }
             if (hist_idx > 0) {
                 hist_idx--;
                 strncpy(line, repl_history[hist_idx], REPL_LINE_MAX-1);
+                line[REPL_LINE_MAX-1] = '\0';
                 len = strlen(line); cur = len;
             }
 
@@ -145,8 +146,10 @@ static int repl_readline(const char *prompt, char *buf, int maxlen) {
                 hist_idx++;
                 if (hist_idx == repl_hist_len) {
                     strncpy(line, saved, REPL_LINE_MAX-1);
+                    line[REPL_LINE_MAX-1] = '\0';
                 } else {
                     strncpy(line, repl_history[hist_idx], REPL_LINE_MAX-1);
+                    line[REPL_LINE_MAX-1] = '\0';
                 }
                 len = strlen(line); cur = len;
             }

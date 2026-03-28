@@ -388,6 +388,67 @@ var w = 0.0
 assert_close("GD via closure reverse-mode", w, 2.0)
 
 
+# ── Section 12: grad block partial-map semantics (grad_fix_proposal.md) ──────
+print("=== 12. grad block partial-map semantics ===")
+line()
+
+# 12a. Map-style grad block — returns {param: grad} instead of a bare value.
+#      Explicit override wins over tape.
+var sq_map = (x){ :: x * x } grad (x, g){ :: {"x": 2.0 * x * g} }
+assert_close("map-style sq grad at x=3",   grad(sq_map)(3.0),   6.0)
+assert_close("map-style sq grad at x=-2",  grad(sq_map)(-2.0), -4.0)
+
+# 12b. Partial override: specify only x, let tape compute y.
+#      f(x,y) = x^2 + y^3  →  ∂f/∂x = 2x,  ∂f/∂y = 3y^2
+var mixed = (x, y){
+    :: x * x + y * y * y
+} grad (x, y, g){
+    :: {"x": 2.0 * x * g}    # override x; y omitted → tape computes 3y^2*g
+}
+var gm = grad(mixed)(2.0, 3.0)
+assert_close("partial override: x from grad block",  gm("x"), 4.0)   # 2*2*1
+assert_close("partial override: y from tape",        gm("y"), 27.0)  # 3*9*1
+
+# 12c. Function parameter — tape propagates through the call transparently.
+#      No grad block needed for f; empty override lets tape do everything.
+var apply_double = (f, x){
+    :: f(x) * 2.0
+} grad (f, x, g){
+    :: {}    # empty override: tape computes full chain rule through f(x)*2
+}
+var dbl = (x){ :: x * x }
+var g3 = grad(apply_double)(dbl, 3.0)
+assert_close("function param: tape computes x through f",  g3("x"), 12.0)  # 2*2*3*1
+assert_eq(   "function param: f has no numeric gradient",  g3("f"), none)
+
+# 12d. Surrogate gradient (straight-through estimator).
+#      step(x) has zero derivative everywhere but we substitute g.
+var step_ste = (x){
+    x > 0.5 :: 1.0,
+    :: 0.0
+} grad (x, g){
+    :: {"x": g}    # STE: pass upstream gradient straight through
+}
+assert_close("STE: grad above threshold", grad(step_ste)(0.8), 1.0)
+assert_close("STE: grad below threshold", grad(step_ste)(0.2), 1.0)
+
+# 12e. Empty map override — identical to having no grad block at all.
+var f_empty_override = (x){ :: x * x } grad (x, g){ :: {} }
+assert_close("empty override: tape computes x^2 grad", grad(f_empty_override)(3.0), 6.0)
+
+# 12f. Tape wins for omitted params even when other params are overridden.
+#      f(x,y,z) = x*y + z^2; override only y; tape handles x and z.
+var f3p = (x, y, z){
+    :: x * y + z * z
+} grad (x, y, z, g){
+    :: {"y": x * g}   # explicit: ∂f/∂y = x
+}
+var gxyz = grad(f3p)(3.0, 4.0, 2.0)
+assert_close("3-param: tape x (=y=4)",  gxyz("x"), 4.0)   # ∂/∂x = y = 4
+assert_close("3-param: override y (=x=3)", gxyz("y"), 3.0) # override: x*g = 3
+assert_close("3-param: tape z (=2z=4)", gxyz("z"), 4.0)   # ∂/∂z = 2z = 4
+
+
 # ── Final report ──────────────────────────────────────────────────────────────
 line()
 print("FINAL: " + str(PASSED) + "/" + str(TOTAL) + " passed")

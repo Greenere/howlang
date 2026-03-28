@@ -854,16 +854,16 @@ static Node *parse_atom(Parser *p) {
          *        OR { cond : { body }, ... }    condition with block body
          * Heuristic: scan ahead to see if first item is "key:" style
          */
-        int lookslike_map = 0, lookslike_list = 0, lookslike_func = 0;
+        int lookslike_map = 0, lookslike_list = 0;
         {
             /* Map: first item is STR or IDENT immediately followed by COLON (not DCOLON)
              * List: no colons at depth 0 before a comma or }
-             * Func: has DCOLON, OR condition is complex expression, OR body is { block }
+             * Func (fallthrough): has DCOLON, OR condition is complex expression, OR body is { block }
              */
             TT t0 = p->tl->toks[p->pos].type;
             TT t1 = (p->pos+1 < p->tl->len) ? p->tl->toks[p->pos+1].type : TT_EOF;
             if (t1 == TT_DCOLON) {
-                lookslike_func = 1;  /* ident :: body → function */
+                /* ident :: body → function (fallthrough) */
             } else if (t0 == TT_STRING && t1 == TT_COLON) {
                 /* String key: always a map literal regardless of value type */
                 lookslike_map = 1;
@@ -872,10 +872,10 @@ static Node *parse_atom(Parser *p) {
                  * If value after : is a block {, it's a branch function.
                  * If value is a simple expr (num/str/bool/ident/paren), it's a map. */
                 TT t2 = (p->pos+2 < p->tl->len) ? p->tl->toks[p->pos+2].type : TT_EOF;
-                if (t2 == TT_LBRACE) lookslike_func = 1;   /* cond: { block } */
-                else lookslike_map = 1;                      /* field: value */
+                if (t2 != TT_LBRACE) lookslike_map = 1;    /* field: value */
+                /* else: cond: { block } → function (fallthrough) */
             } else if (t0 == TT_DCOLON) {
-                lookslike_func = 1;  /* :: expr → function */
+                /* :: expr → function (fallthrough) */
             } else if (t0 == TT_RBRACE) {
                 lookslike_list = 0; /* empty already handled */
             } else {
@@ -892,13 +892,10 @@ static Node *parse_atom(Parser *p) {
                     if(depth==0&&st==TT_COMMA) break;
                     scan++;
                 }
-                if(found_dcolon) {
-                    lookslike_func=1;   /* contains :: → branch function */
-                } else if(found_colon) {
-                    lookslike_func=1;   /* contains : → branch function (cond: body) */
-                } else {
+                if(!found_dcolon && !found_colon) {
                     lookslike_list=1;
                 }
+                /* else: contains :: or : → branch function (fallthrough) */
             }
         }
         if (lookslike_list) {
