@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. v1.2.3)"
+        required: true
 
 jobs:
   build:
@@ -54,5 +59,6 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: howlang-*
           generate_release_notes: true
