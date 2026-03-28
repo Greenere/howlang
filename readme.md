@@ -518,13 +518,7 @@ howlang/
       how_lexer.how           # Lexer written in Howlang
       how_parser.how          # Parser written in Howlang
       how_eval.how            # Evaluator written in Howlang
-    test_all.how              # Main test suite
-    lru_cache.how             # LRU cache module
-    lru_cache_test.how        # LRU cache tests
-    graph.how                 # Graph + Dijkstra module
-    graph_test.how            # Graph tests
-    test_loops.how            # Loop semantics tests
-    try_catch_test.how        # Error handling tests
+    ...
 ```
 
 ---
