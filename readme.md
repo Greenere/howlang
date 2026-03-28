@@ -421,6 +421,10 @@ Howlang  |  Ctrl-D or quit() to exit
 
 ## Automatic Differentiation
 
+> [!WARNING]
+> This `grad` clause is incomplete, especially when some parameter is a function
+
+
 `grad(f)` returns a new function that computes the gradient of `f`. It has the
 same calling convention as `f` but returns gradient information instead of the
 primal value.
