@@ -59,7 +59,7 @@ struct Node {
         struct { Node *callee; NodeList args; int bracket; } call;
         struct { Node *col; Node *start; Node *stop; } slice;  /* col(start:stop) */
         struct { StrList params; NodeList branches; int is_loop; } func;  /* is_loop: (:){} loop */
-        struct { char *iter_var; Node *start; Node *stop; NodeList branches; } forloop;
+        struct { char *iter_var; Node *start; Node *stop; NodeList branches; int is_parallel; } forloop;
         struct { MapItemList items; } map_lit;
         struct { NodeList stmts; } block;
         struct { Node *cond; Node *body; int is_ret; int is_throw; } branch;

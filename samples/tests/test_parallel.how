@@ -1,0 +1,97 @@
+# test_parallel.how — tests for parallel for-range (^{}) and par() builtin
+
+var pass = 0
+var fail = 0
+
+var check = (label, got, expected) {
+    got == expected : {
+        pass += 1
+    },
+    got != expected : {
+        fail += 1,
+        print("FAIL:", label, "got:", got, "expected:", expected)
+    }
+}
+
+# ── Basic parallel map ──────────────────────────────────────────────────────
+
+var nums = {1, 2, 3, 4, 5}
+var squares = (i=0:len(nums))^{ :: nums(i) * nums(i) }()
+check("parallel map len", len(squares), 5)
+check("parallel map 0", squares(0), 1)
+check("parallel map 1", squares(1), 4)
+check("parallel map 2", squares(2), 9)
+check("parallel map 3", squares(3), 16)
+check("parallel map 4", squares(4), 25)
+
+# ── Reading outer scope (multiplier) ────────────────────────────────────────
+
+var multiplier = 10
+var scaled = (i=0:len(nums))^{ :: nums(i) * multiplier }()
+check("outer read len", len(scaled), 5)
+check("outer read 0", scaled(0), 10)
+check("outer read 4", scaled(4), 50)
+
+# ── Empty range returns none ─────────────────────────────────────────────────
+
+var empty_result = (i=0:0)^{ :: i }()
+check("empty range", empty_result, none)
+
+# ── No :: in body returns none ───────────────────────────────────────────────
+
+var side_only = (i=0:3)^{ var x = i * 2 }()
+check("no return", side_only, none)
+
+# ── Non-zero start ────────────────────────────────────────────────────────────
+
+var from_five = (i=5:8)^{ :: i }()
+check("start 5 len", len(from_five), 3)
+check("start 5 val 0", from_five(0), 5)
+check("start 5 val 1", from_five(1), 6)
+check("start 5 val 2", from_five(2), 7)
+
+# ── Single iteration ─────────────────────────────────────────────────────────
+
+var one = (i=0:1)^{ :: i * 99 }()
+check("single iter len", len(one), 1)
+check("single iter val", one(0), 0)
+
+# ── Continue in parallel body ─────────────────────────────────────────────────
+
+var evens = (i=0:6)^{
+    i % 2 != 0 : continue,
+    :: i
+}()
+check("continue len", len(evens), 6)
+check("continue 0", evens(0), 0)
+check("continue 1", evens(1), none)
+check("continue 2", evens(2), 2)
+check("continue 4", evens(4), 4)
+
+# ── par() builtin ─────────────────────────────────────────────────────────────
+
+var double_fn = (x){ :: x * 2 }
+var doubled = par({1, 2, 3, 4, 5}, double_fn)
+check("par len", len(doubled), 5)
+check("par 0", doubled(0), 2)
+check("par 1", doubled(1), 4)
+check("par 4", doubled(4), 10)
+
+var par_empty = par(list(), double_fn)
+check("par empty len", len(par_empty), 0)
+
+# ── Local variables inside parallel body ─────────────────────────────────────
+
+var computed = (i=0:4)^{
+    var local_val = i * i + 1,
+    :: local_val
+}()
+check("local var 0", computed(0), 1)
+check("local var 1", computed(1), 2)
+check("local var 2", computed(2), 5)
+check("local var 3", computed(3), 10)
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+
+print("parallel tests:", pass, "passed,", fail, "failed")
+fail == 0 : print("ALL PARALLEL TESTS PASSED")

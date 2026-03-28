@@ -180,7 +180,7 @@ function scanTokens(text, document, diagnostics) {
       continue;
     }
 
-    const oneCharOps = new Set(['+', '-', '*', '/', '%', '=', '<', '>', ':', '.', ',', ';']);
+    const oneCharOps = new Set(['+', '-', '*', '/', '%', '=', '<', '>', ':', '.', ',', ';', '^']);
     const openBrackets = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
     const closeBrackets = new Map([[')', '('], [']', '['], ['}', '{']]);
 
@@ -279,9 +279,17 @@ function runStructuralChecks(scan, document, diagnostics) {
       }
     }
 
-    if (token.value === 'break' || token.value === 'continue') {
+    if (token.value === 'break') {
+      if (isInsideParallelLoop(tokens, i)) {
+        addDiagnostic(document, diagnostics, token.line, token.col, token.endCol, "'break' is not allowed inside a parallel loop (^{}). Use 'continue' to skip an iteration.", vscode.DiagnosticSeverity.Error, 'HL106');
+      } else if (!isInsideLoop(tokens, i)) {
+        addDiagnostic(document, diagnostics, token.line, token.col, token.endCol, "'break' is usually only valid inside '(:)={...}' or range loops.", vscode.DiagnosticSeverity.Warning, 'HL105');
+      }
+    }
+
+    if (token.value === 'continue') {
       if (!isInsideLoop(tokens, i)) {
-        addDiagnostic(document, diagnostics, token.line, token.col, token.endCol, `'${token.value}' is usually only valid inside '(:)={...}' or range loops.`, vscode.DiagnosticSeverity.Warning, 'HL105');
+        addDiagnostic(document, diagnostics, token.line, token.col, token.endCol, "'continue' is usually only valid inside '(:)={...}' or range loops.", vscode.DiagnosticSeverity.Warning, 'HL105');
       }
     }
   }
@@ -316,6 +324,24 @@ function previousMeaningful(tokens, startIndex) {
     if (tokens[i].type !== 'newline') return tokens[i];
   }
   return null;
+}
+
+/* Returns true if `index` is directly inside a parallel loop body (^{ ... }).
+   Walks backward to find the nearest enclosing { and checks whether the token
+   immediately before it is `^`. */
+function isInsideParallelLoop(tokens, index) {
+  let depth = 0;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const t = tokens[i];
+    if (t.type === 'close' && t.value === '}') { depth += 1; continue; }
+    if (t.type === 'open' && t.value === '{') {
+      if (depth > 0) { depth -= 1; continue; }
+      // Found the nearest enclosing {. Check if it's preceded by ^.
+      const prev = previousMeaningful(tokens, i - 1);
+      return prev !== null && prev.type === 'op' && prev.value === '^';
+    }
+  }
+  return false;
 }
 
 function isInsideLoop(tokens, index) {

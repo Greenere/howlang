@@ -35,6 +35,17 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
 
+      - name: Test
+        run: |
+          HOW=./c_interpreter/build/howlang
+          $HOW samples/tests/test_all.how
+          $HOW samples/tests/test_loops.how
+          $HOW samples/tests/test_parallel.how
+          cd samples
+          ../c_interpreter/build/howlang tests/graph_test.how
+          ../c_interpreter/build/howlang tests/lru_cache_test.how
+          ../c_interpreter/build/howlang tests/brainfuck_test.how
+
       - name: Rename artifact
         run: cp c_interpreter/build/howlang ${{ matrix.artifact }}
 

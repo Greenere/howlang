@@ -53,6 +53,7 @@ static const char *token_type_name(int t) {
         case TT_NOT:       return "'not'";
         case TT_DBANG:     return "'!!'";
         case TT_CATCH:     return "'catch'";
+        case TT_CARET:     return "'^'";
         default:           return "<unknown>";
     }
 }
@@ -956,8 +957,8 @@ static Node *parse_atom(Parser *p) {
                     if (depth==0) {
                         if (!found_colon && st==TT_COLON) { found_colon=1; scan++; continue; }
                         if (found_colon && !found_rparen && st==TT_RPAREN) { found_rparen=1; scan++; continue; }
-                        if (found_rparen && st==TT_LBRACE) { is_forrange=1; break; }
-                        if (found_rparen) break; /* something other than { after ) */
+                        if (found_rparen && (st==TT_LBRACE || st==TT_CARET)) { is_forrange=1; break; }
+                        if (found_rparen) break; /* something other than { or ^ after ) */
                         if (!found_colon && st==TT_RPAREN) break; /* no colon — not a range */
                     }
                     scan++;
@@ -973,9 +974,10 @@ static Node *parse_atom(Parser *p) {
                 Node *stop  = parse_expr(p);
                 p_expect(p,TT_RPAREN,"expected ')'");
                 Node *n = make_node(N_FORLOOP,line);
-                n->forloop.iter_var = ivar;
-                n->forloop.start    = start;
-                n->forloop.stop     = stop;
+                n->forloop.iter_var   = ivar;
+                n->forloop.start      = start;
+                n->forloop.stop       = stop;
+                n->forloop.is_parallel = p_match(p, TT_CARET) != NULL;
                 parse_func_body(p,&n->forloop.branches);
                 return n;
             }

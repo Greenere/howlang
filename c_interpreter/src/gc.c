@@ -1,4 +1,5 @@
 #include "runtime_internal.h"
+#include <pthread.h>
 
 /* ── GC globals ─────────────────────────────────────────────────────────── */
 
@@ -15,6 +16,9 @@ size_t g_gc_allocations = 0;
 static size_t g_gc_collections = 0;
 static int    g_gc_in_progress = 0;
 
+pthread_mutex_t g_alloc_mutex = PTHREAD_MUTEX_INITIALIZER;
+volatile int    g_gc_suspended = 0;
+
 /* Value singletons — initialised in how_runtime_bootstrap */
 Value *V_NONE_SINGLETON  = NULL;
 Value *V_TRUE_SINGLETON  = NULL;
@@ -29,6 +33,7 @@ static GcValueRootStack g_gc_value_roots = {0};
 static GcEnvRootStack   g_gc_env_roots   = {0};
 
 void gc_push_value_root(Value **slot) {
+    if (g_gc_suspended) return;
     if (g_gc_value_roots.len == g_gc_value_roots.cap) {
         g_gc_value_roots.cap = g_gc_value_roots.cap ? g_gc_value_roots.cap * 2 : 64;
         g_gc_value_roots.slots = xrealloc(g_gc_value_roots.slots,
@@ -37,9 +42,11 @@ void gc_push_value_root(Value **slot) {
     g_gc_value_roots.slots[g_gc_value_roots.len++] = slot;
 }
 void gc_pop_value_root(void) {
+    if (g_gc_suspended) return;
     if (g_gc_value_roots.len > 0) g_gc_value_roots.len--;
 }
 void gc_push_env_root(Env **slot) {
+    if (g_gc_suspended) return;
     if (g_gc_env_roots.len == g_gc_env_roots.cap) {
         g_gc_env_roots.cap = g_gc_env_roots.cap ? g_gc_env_roots.cap * 2 : 32;
         g_gc_env_roots.slots = xrealloc(g_gc_env_roots.slots,
@@ -48,6 +55,7 @@ void gc_push_env_root(Env **slot) {
     g_gc_env_roots.slots[g_gc_env_roots.len++] = slot;
 }
 void gc_pop_env_root(void) {
+    if (g_gc_suspended) return;
     if (g_gc_env_roots.len > 0) g_gc_env_roots.len--;
 }
 
@@ -58,9 +66,11 @@ Value *val_new(VT type) {
     memset(v, 0, sizeof(*v));
     v->type = type;
     v->refcount = 1;
+    pthread_mutex_lock(&g_alloc_mutex);
     v->gc_next = g_all_values;
     g_all_values = v;
     g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
     return v;
 }
 
@@ -73,7 +83,9 @@ Value *val_str_own(char *s)    { Value *v = val_new(VT_STR); v->sval = s; return
 HowMap *map_new(void) {
     HowMap *m = xmalloc(sizeof(*m));
     m->pairs = NULL; m->len = m->cap = 0; m->refcount = 1; m->gc_mark = 0;
+    pthread_mutex_lock(&g_alloc_mutex);
     m->gc_next = g_all_maps; g_all_maps = m; g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
     return m;
 }
 Value *val_map(HowMap *m) { Value *v = val_new(VT_MAP); v->map = m; m->refcount++; return v; }
@@ -81,22 +93,24 @@ Value *val_map(HowMap *m) { Value *v = val_new(VT_MAP); v->map = m; m->refcount+
 HowList *list_new(void) {
     HowList *l = xmalloc(sizeof(*l));
     l->items = NULL; l->len = l->cap = 0; l->refcount = 1; l->gc_mark = 0;
+    pthread_mutex_lock(&g_alloc_mutex);
     l->gc_next = g_all_lists; g_all_lists = l; g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
     return l;
 }
 Value *val_list(HowList *l) { Value *v = val_new(VT_LIST); v->list = l; l->refcount++; return v; }
 
 /* ── Reference counting ──────────────────────────────────────────────────── */
 
-void val_decref(Value *v)         { if (v) v->refcount--; }
-Value *val_incref(Value *v)       { if (v) v->refcount++; return v; }
-void map_decref(HowMap *m)        { if (m) m->refcount--; }
-void list_decref(HowList *l)      { if (l) l->refcount--; }
-void func_decref(HowFunc *f)      { if (f) f->refcount--; }
-void cls_decref(HowClass *c)      { if (c) c->refcount--; }
-void inst_decref(HowInstance *i)  { if (i) i->refcount--; }
-void mod_decref(HowModule *m)     { if (m) m->refcount--; }
-void env_decref(Env *e)           { if (e) e->refcount--; }
+void val_decref(Value *v)         { if (v) __atomic_fetch_sub(&v->refcount, 1, __ATOMIC_RELAXED); }
+Value *val_incref(Value *v)       { if (v) __atomic_fetch_add(&v->refcount, 1, __ATOMIC_RELAXED); return v; }
+void map_decref(HowMap *m)        { if (m) __atomic_fetch_sub(&m->refcount, 1, __ATOMIC_RELAXED); }
+void list_decref(HowList *l)      { if (l) __atomic_fetch_sub(&l->refcount, 1, __ATOMIC_RELAXED); }
+void func_decref(HowFunc *f)      { if (f) __atomic_fetch_sub(&f->refcount, 1, __ATOMIC_RELAXED); }
+void cls_decref(HowClass *c)      { if (c) __atomic_fetch_sub(&c->refcount, 1, __ATOMIC_RELAXED); }
+void inst_decref(HowInstance *i)  { if (i) __atomic_fetch_sub(&i->refcount, 1, __ATOMIC_RELAXED); }
+void mod_decref(HowModule *m)     { if (m) __atomic_fetch_sub(&m->refcount, 1, __ATOMIC_RELAXED); }
+void env_decref(Env *e)           { if (e) __atomic_fetch_sub(&e->refcount, 1, __ATOMIC_RELAXED); }
 
 StrList strlist_clone(StrList src) {
     StrList out = {0};
@@ -113,9 +127,12 @@ StrList strlist_clone(StrList src) {
 Env *env_new(Env *parent) {
     Env *e = xmalloc(sizeof(*e));
     e->entries = NULL; e->len = e->cap = 0;
-    e->parent = parent; if (parent) parent->refcount++;
+    e->parent = parent; if (parent) __atomic_fetch_add(&parent->refcount, 1, __ATOMIC_RELAXED);
     e->refcount = 1; e->gc_mark = 0; e->inst = NULL;
+    e->is_parallel = 0;
+    pthread_mutex_lock(&g_alloc_mutex);
     e->gc_next = g_all_envs; g_all_envs = e; g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
     return e;
 }
 
@@ -168,9 +185,12 @@ Value *env_get(Env *e, const char *key) {
 }
 
 int env_assign(Env *e, const char *key, Value *val) {
+    int crossed_parallel = 0;
     for (Env *cur = e; cur; cur = cur->parent) {
         for (int i = 0; i < cur->len; i++) {
             if (!strcmp(cur->entries[i].key, key)) {
+                if (crossed_parallel)
+                    die("cannot write to outer variable '%s' in a parallel loop (^{})", key);
                 val_decref(cur->entries[i].val);
                 cur->entries[i].val = val_incref(val);
                 return 1;
@@ -180,12 +200,16 @@ int env_assign(Env *e, const char *key, Value *val) {
             HowMap *fields = cur->inst->fields;
             for (int i = 0; i < fields->len; i++) {
                 if (!strcmp(fields->pairs[i].key, key)) {
+                    if (crossed_parallel)
+                        die("cannot write to outer instance field '%s' in a parallel loop (^{})", key);
                     val_decref(fields->pairs[i].val);
                     fields->pairs[i].val = val_incref(val);
                     return 1;
                 }
             }
         }
+        /* When leaving an is_parallel scope, any outer variable becomes off-limits */
+        if (cur->is_parallel) crossed_parallel = 1;
     }
     return 0;
 }
@@ -499,6 +523,7 @@ void gc_clear_root_stacks(void) {
 }
 
 void gc_collect(Env *root_env) {
+    if (g_gc_suspended) return;
     if (g_gc_in_progress) return;
     g_gc_in_progress = 1;
     if (V_NONE_SINGLETON)  gc_mark_value(V_NONE_SINGLETON);

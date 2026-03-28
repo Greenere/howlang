@@ -167,6 +167,37 @@ my_loop()   # prints 0, 1, 2
 my_loop()   # prints 0, 1, 2 again
 ```
 
+#### Parallel for-range: `(var=start:stop)^{ }()`
+
+Add `^` between `)` and `{` to run all iterations concurrently on a thread pool.
+Useful for independent, compute-heavy work:
+
+```
+var nums = {1, 2, 3, 4, 5, 6, 7, 8}
+
+# Parallel map — square each element
+var squares = (i=0:len(nums))^{ :: nums(i) * nums(i) }()
+# squares == {1, 4, 9, 16, 25, 36, 49, 64}  (index order preserved)
+
+# Reading outer variables is fine
+var scale = 10
+var scaled = (i=0:len(nums))^{ :: nums(i) * scale }()
+
+# Writing to outer variables raises a RuntimeError — use :: to collect results
+```
+
+The loop returns a **list** (in original index order) if any iteration used `::`,
+or `none` if no `::` appeared in the body. `continue` works normally; `break` is
+not allowed inside `^{ }`.
+
+`par(lst, fn)` is syntactic sugar for the common parallel-map pattern:
+
+```
+var double = (x){ :: x * 2 }
+var result = par(nums, double)
+# equivalent to: (i=0:len(nums))^{ :: double(nums(i)) }()
+```
+
 #### Loop control: `break` and `continue`
 
 Inside any loop, `break` exits immediately and `continue` skips the rest of the
@@ -346,9 +377,10 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `read(path)`            | Read entire file as a string                             |
 | `write(path, v)`        | Write value to file (strings written raw, others repr'd) |
 | `args()`                | List of command-line arguments                           |
+| `par(lst, fn)`          | Apply `fn` to each element of `lst` in parallel; returns result list |
 | `gc()`                  | Trigger a garbage collection cycle                       |
 | `cwd()`                 | Return the current working directory as a string         |
-| `run(cmd)`             | Execute a shell command; returns the exit code as a number |
+| `run(cmd)`              | Execute a shell command; returns the exit code as a number |
 
 ---
 
@@ -393,6 +425,7 @@ Howlang  |  Ctrl-D or quit() to exit
 | `(:){ ... }()` | Unbounded loop, `::` breaks and returns |
 | `(:)= { ... }` | Same but auto-executes; `break` exits without return |
 | `(i=a:b){ ... }()` | For-range loop; `::` exits immediately with a value |
+| `(i=a:b)^{ ... }()` | Parallel for-range; iterations run concurrently, results collected in order |
 
 ### Branch firing rules
 
@@ -486,6 +519,7 @@ Hint: this usually means a missing ')' earlier, or a trailing comma.
 | `'*' requires numbers` | Type mismatch in arithmetic |
 | `expected N args but got M` | Wrong number of arguments to a function |
 | `assignment to undeclared variable 'x'` | Assigned without `var x = ...` first |
+| `cannot write to outer variable 'x' in a parallel loop` | Tried to mutate an outer variable inside `^{ }` — use `::` to return results instead |
 
 ---
 
@@ -528,24 +562,20 @@ howlang/
 ```bash
 cd c_interpreter
 cmake -S . -B build && cmake --build build
-HOW=./build/howlang
+cd ..
+HOW=./c_interpreter/build/howlang
 
-$HOW ../samples/test_all.how
+$HOW samples/tests/test_all.how          # 54/54 passed
+$HOW samples/tests/test_loops.how        # 41/41 passed
+$HOW samples/tests/test_parallel.how     # 31/31 passed
+
+cd samples
+../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34 passed
+../c_interpreter/build/howlang tests/graph_test.how        # 32/32 passed
+../c_interpreter/build/howlang tests/brainfuck_test.how    # 32/32 passed
+cd ..
+
+# Same core suite via the self-hosting meta-interpreter
+$HOW samples/how_interpreter/how_meta.how samples/tests/test_all.how
 # FINAL: 54/54 passed
-
-$HOW ../samples/how_interpreter/how_meta.how ../samples/test_all.how
-# FINAL: 54/54 passed  (same suite via the meta-interpreter)
-
-cd ../samples
-../c_interpreter/build/howlang lru_cache_test.how
-# 34 passed   0 failed
-
-../c_interpreter/build/howlang graph_test.how
-# 32 passed   0 failed
-
-../c_interpreter/build/howlang test_loops.how
-# 41 passed   0 failed
-
-../c_interpreter/build/howlang try_catch_test.how
-# 28 passed   0 failed
 ```

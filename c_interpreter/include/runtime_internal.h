@@ -8,6 +8,7 @@
 
 #include "common.h"
 #include "ast.h"
+#include <pthread.h>
 
 /* ── Value types ─────────────────────────────────────────────────────────── */
 
@@ -52,6 +53,7 @@ struct HowFunc {
     int      is_loop;
     /* for-range callable fields */
     int      is_forrange;
+    int      is_parallel;   /* 1 = parallel (^{}) variant */
     char    *iter_var;
     Node    *fr_start;
     Node    *fr_stop;
@@ -117,6 +119,7 @@ struct Env {
     int       gc_mark;
     struct Env *gc_next;
     HowInstance *inst;  /* non-NULL if this is an InstanceEnv */
+    int       is_parallel; /* 1 = this is a parallel loop's local scope */
 };
 
 /* ── Control flow signals ─────────────────────────────────────────────────── */
@@ -153,6 +156,9 @@ extern HowInstance *g_all_instances;
 extern HowModule   *g_all_modules;
 extern Env         *g_all_envs;
 extern size_t       g_gc_allocations;
+
+extern pthread_mutex_t g_alloc_mutex;   /* protects GC linked-list insertions */
+extern volatile int    g_gc_suspended;  /* set to 1 during parallel loops */
 
 /* Value singletons — defined in gc.c, initialised in how_runtime_bootstrap */
 extern Value *V_NONE_SINGLETON;

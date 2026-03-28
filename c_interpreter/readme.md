@@ -4,6 +4,7 @@
 
 - A C compiler (macOS: `clang` via Xcode Command Line Tools; Linux: `gcc` or `clang`)
 - CMake 3.16 or newer
+- POSIX threads (`pthread`) — provided by the OS on macOS and Linux; no extra install needed
 
 ### macOS setup
 
@@ -64,8 +65,48 @@ c_interpreter/
 
 ## Build outputs
 
-| Artifact                  | Description              |
-|---------------------------|--------------------------|
-| `build/howlang`           | Interpreter executable   |
-| `build/libhowlang_frontend.a` | Parser static library |
-| `build/libhowlang_runtime.a`  | Runtime static library |
+| Artifact                      | Description              |
+|-------------------------------|--------------------------|
+| `build/howlang`               | Interpreter executable   |
+| `build/libhowlang_frontend.a` | Parser static library    |
+| `build/libhowlang_runtime.a`  | Runtime static library   |
+
+## Running tests
+
+From the repo root:
+
+```bash
+./c_interpreter/build/howlang samples/tests/test_all.how       # 54/54
+./c_interpreter/build/howlang samples/tests/test_loops.how     # 41/41
+./c_interpreter/build/howlang samples/tests/test_parallel.how  # 31/31
+cd samples && ../c_interpreter/build/howlang tests/graph_test.how       # 32/32
+cd samples && ../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34
+cd samples && ../c_interpreter/build/howlang tests/brainfuck_test.how   # 32/32
+```
+
+## Parallel for-range
+
+Howlang supports a parallel variant of the for-range loop using `^`:
+
+```
+# Sequential
+var results = (i=0:n){ :: work(i) }()
+
+# Parallel — iterations run concurrently, result list preserves index order
+var results = (i=0:n)^{ :: work(i) }()
+```
+
+Semantics:
+- Iterations run on a thread pool sized to the number of logical CPUs
+- Each iteration gets its own local scope
+- Writing to a variable declared outside the loop is a runtime error
+- Reading outer variables is allowed
+- `::` results are collected into a list in original index order; returns `none` if no `::` in body
+- `break` is not allowed; `continue` works normally
+
+`par(lst, fn)` is syntactic sugar for the common map pattern:
+
+```
+var doubled = par({1, 2, 3}, (x){ :: x * 2 })
+# same as: (i=0:len(lst))^{ :: fn(lst(i)) }()
+```

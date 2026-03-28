@@ -5,6 +5,7 @@
  */
 #include "runtime_internal.h"
 #include "runtime.h"
+#include <pthread.h>
 
 /* ── Static helpers ──────────────────────────────────────────────────────── */
 
@@ -427,6 +428,115 @@ BUILTIN(host_call_fn) {
     return res;
 }
 
+/* par() worker — calls fn(item) for each item in a slice */
+typedef struct {
+    Value  *fn_val;
+    Value **items;
+    int     start;
+    int     end;
+    Value **results;
+    int     had_error;
+    char    error[512];
+} ParBuiltinArg;
+
+static void *par_builtin_worker(void *varg) {
+    ParBuiltinArg *arg = (ParBuiltinArg *)varg;
+    Signal sig = {SIG_NONE, NULL};
+    for (int i = arg->start; i < arg->end; i++) {
+        if (arg->had_error) break;
+        Value *item = arg->items[i];
+        Value *res  = eval_call_val(arg->fn_val, &item, 1, &sig, 0);
+        if (sig.type == SIG_ERROR) {
+            char *s = sig.retval ? val_repr(sig.retval) : NULL;
+            snprintf(arg->error, sizeof(arg->error), "%s",
+                     s ? s : "error in par() function call");
+            if (s) free(s);
+            if (sig.retval) val_decref(sig.retval);
+            val_decref(res);
+            arg->had_error = 1;
+        } else if (sig.type == SIG_RETURN) {
+            val_decref(arg->results[i]);
+            arg->results[i] = sig.retval ? sig.retval : val_none();
+            sig.retval = NULL;
+            sig.type   = SIG_NONE;
+        } else {
+            val_decref(arg->results[i]);
+            arg->results[i] = res;
+        }
+    }
+    return NULL;
+}
+
+BUILTIN(par_fn) {
+    NEED(2);
+    Value *lst = ARG(0);
+    Value *fn  = ARG(1);
+    if (lst->type != VT_LIST) die("par(): first argument must be a list");
+
+    int n = lst->list->len;
+    if (n == 0) {
+        HowList *empty = list_new();
+        Value *v = val_list(empty); list_decref(empty); return v;
+    }
+
+    Value **results = xmalloc((size_t)n * sizeof(Value *));
+    for (int i = 0; i < n; i++) results[i] = val_none();
+
+    int num_cpus = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (num_cpus < 1) num_cpus = 1;
+    int num_threads = n < num_cpus ? n : num_cpus;
+
+    ParBuiltinArg *args = xmalloc((size_t)num_threads * sizeof(ParBuiltinArg));
+    int chunk = n / num_threads;
+    int rem   = n % num_threads;
+    int pos   = 0;
+    for (int t = 0; t < num_threads; t++) {
+        int this_chunk      = chunk + (t < rem ? 1 : 0);
+        args[t].fn_val      = fn;
+        args[t].items       = lst->list->items;
+        args[t].start       = pos;
+        args[t].end         = pos + this_chunk;
+        args[t].results     = results;
+        args[t].had_error   = 0;
+        args[t].error[0]    = '\0';
+        pos += this_chunk;
+    }
+
+    __atomic_store_n(&g_gc_suspended, 1, __ATOMIC_RELEASE);
+
+    pthread_t *threads = xmalloc((size_t)num_threads * sizeof(pthread_t));
+    for (int t = 0; t < num_threads; t++)
+        pthread_create(&threads[t], NULL, par_builtin_worker, &args[t]);
+    for (int t = 0; t < num_threads; t++)
+        pthread_join(threads[t], NULL);
+
+    __atomic_store_n(&g_gc_suspended, 0, __ATOMIC_RELEASE);
+
+    char *first_error = NULL;
+    for (int t = 0; t < num_threads; t++)
+        if (args[t].had_error && !first_error) first_error = args[t].error;
+
+    free(threads);
+    if (first_error) {
+        char errbuf[512]; snprintf(errbuf, sizeof(errbuf), "%s", first_error);
+        free(args);
+        for (int i = 0; i < n; i++) val_decref(results[i]);
+        free(results);
+        die("%s", errbuf);
+        return val_none();
+    }
+    free(args);
+
+    HowList *out = list_new();
+    for (int i = 0; i < n; i++) {
+        list_push(out, results[i]);
+        val_decref(results[i]);
+    }
+    free(results);
+    Value *ret = val_list(out); list_decref(out);
+    return ret;
+}
+
 /* ── Builtin value factory ───────────────────────────────────────────────── */
 
 Value *make_builtin(const char *name, BuiltinFn fn) {
@@ -475,6 +585,7 @@ void setup_globals(Env *env) {
     REG("min",     min_fn);
     REG("quit",    quit_fn);
     REG("gc",      gc_fn);
+    REG("par",     par_fn);
     REG("_host_call",      host_call_fn);
     REG("_basename", basename_fn);
     REG("_dirname",  dirname_fn);

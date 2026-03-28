@@ -43,6 +43,7 @@ static Value *eval(Node *node, Env *env, Signal *sig);
 Value        *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line);
 static void   run_branches(NodeList *branches, Env *env, Signal *sig);
 static void   run_loop(HowFunc *fn, Signal *sig);
+static Value *run_parallel_loop(HowFunc *fn, Signal *sig);
 static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig);
 static void   exec_stmt(Node *node, Env *env, Signal *sig);
 void          exec_body(Node *body, Env *env, Signal *sig);
@@ -409,13 +410,15 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         memset(fn, 0, sizeof(*fn));
         fn->params   = strlist_clone(node->func.params);
         fn->branches = node->func.branches;
-        fn->closure  = env; env->refcount++;
+        fn->closure  = env; __atomic_fetch_add(&env->refcount, 1, __ATOMIC_RELAXED);
         fn->is_loop  = node->func.is_loop;
         fn->refcount = 1;
         /* Register fn AFTER val_new to avoid GC sweeping fn before its Value exists */
         Value *v = val_new(VT_FUNC);
         v->func = fn;
+        pthread_mutex_lock(&g_alloc_mutex);
         fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
+        pthread_mutex_unlock(&g_alloc_mutex);
         return v;
     }
 
@@ -424,12 +427,14 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         memset(cls, 0, sizeof(*cls));
         cls->params   = strlist_clone(node->func.params);
         cls->branches = node->func.branches;
-        cls->closure  = env; env->refcount++;
+        cls->closure  = env; __atomic_fetch_add(&env->refcount, 1, __ATOMIC_RELAXED);
         cls->refcount = 1;
         /* Register cls AFTER val_new to avoid GC sweeping cls before its Value exists */
         Value *v = val_new(VT_CLASS);
         v->cls = cls;
+        pthread_mutex_lock(&g_alloc_mutex);
         cls->gc_next = g_all_classes; g_all_classes = cls; g_gc_allocations++;
+        pthread_mutex_unlock(&g_alloc_mutex);
         return v;
     }
 
@@ -465,17 +470,20 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         HowFunc *fn = xmalloc(sizeof(HowFunc)); memset(fn,0,sizeof(HowFunc));
         fn->is_loop     = 0;
         fn->is_forrange = 1;
+        fn->is_parallel = node->forloop.is_parallel;
         fn->iter_var    = xstrdup(node->forloop.iter_var);
         fn->fr_start    = node->forloop.start;
         fn->fr_stop     = node->forloop.stop;
         for (int _i=0; _i<node->forloop.branches.len; _i++)
             nl_push(&fn->branches, node->forloop.branches.nodes[_i]);
         fn->closure  = env;
-        if (env) env->refcount++;
+        if (env) __atomic_fetch_add(&env->refcount, 1, __ATOMIC_RELAXED);
         fn->refcount = 1;
         Value *fv = val_new(VT_FUNC);
         fv->func = fn;
+        pthread_mutex_lock(&g_alloc_mutex);
         fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
+        pthread_mutex_unlock(&g_alloc_mutex);
         return fv;
     }
 
@@ -553,6 +561,166 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
     }
 }
 
+/* ── Parallel for-range loop ─────────────────────────────────────────────── */
+
+typedef struct {
+    HowFunc  *fn;
+    int       iter_start;   /* first local index this thread handles (0-based into range) */
+    int       iter_end;     /* exclusive end */
+    int       range_offset; /* actual loop variable = range_offset + local_index */
+    Value   **results;      /* shared pre-allocated results array */
+    int       had_error;
+    char      error[512];
+    int       any_return;   /* 1 if any iteration hit :: */
+} ParArg;
+
+static void *parallel_worker(void *varg) {
+    ParArg  *arg = (ParArg *)varg;
+    HowFunc *fn  = arg->fn;
+
+    for (int idx = arg->iter_start; idx < arg->iter_end; idx++) {
+        if (arg->had_error) break;
+
+        /* Each iteration gets its own local scope */
+        Env *local = env_new(fn->closure);
+        local->is_parallel = 1;
+
+        /* Bind the loop variable */
+        Value *iv = val_num((double)(arg->range_offset + idx));
+        env_set(local, fn->iter_var, iv);
+        val_decref(iv);
+
+        Signal sig = {SIG_NONE, NULL};
+        run_branches(&fn->branches, local, &sig);
+
+        /* continue — skip rest of this iteration's body */
+        if (sig.type == SIG_NEXT) sig.type = SIG_NONE;
+
+        /* :: value — store result at this iteration's slot */
+        if (sig.type == SIG_RETURN && sig.retval) {
+            val_decref(arg->results[idx]);
+            arg->results[idx] = sig.retval;   /* transfer ownership */
+            sig.retval = NULL;
+            sig.type   = SIG_NONE;
+            arg->any_return = 1;
+        }
+
+        /* break — not allowed in parallel loops */
+        if (sig.type == SIG_BREAK) {
+            snprintf(arg->error, sizeof(arg->error),
+                     "RuntimeError: 'break' is not allowed in a parallel loop (^{})");
+            arg->had_error = 1;
+        } else if (sig.type == SIG_ERROR) {
+            char *s = sig.retval ? val_repr(sig.retval) : NULL;
+            snprintf(arg->error, sizeof(arg->error), "%s",
+                     s ? s : "error in parallel loop body");
+            if (s) free(s);
+            if (sig.retval) val_decref(sig.retval);
+            arg->had_error = 1;
+        }
+
+        env_decref(local);
+    }
+    return NULL;
+}
+
+static Value *run_parallel_loop(HowFunc *fn, Signal *sig) {
+    /* Evaluate start/stop on the main thread before spawning workers */
+    int start_v = 0;
+    if (fn->fr_start) {
+        Value *sv = eval(fn->fr_start, fn->closure, sig);
+        if (sig->type != SIG_NONE) return sv;
+        start_v = (int)sv->nval;
+        val_decref(sv);
+    }
+    Value *stop_val = eval(fn->fr_stop, fn->closure, sig);
+    if (sig->type != SIG_NONE) return stop_val;
+    int stop_v = (int)stop_val->nval;
+    val_decref(stop_val);
+
+    int n = stop_v - start_v;
+    if (n <= 0) return val_none();
+
+    /* Pre-allocate results — all slots start as none */
+    Value **results = xmalloc((size_t)n * sizeof(Value *));
+    for (int i = 0; i < n; i++) results[i] = val_none();
+
+    /* Determine thread count: min(n, number of logical CPUs) */
+    int num_cpus = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (num_cpus < 1) num_cpus = 1;
+    int num_threads = n < num_cpus ? n : num_cpus;
+
+    /* Build per-thread arguments with static work partitioning */
+    ParArg *args = xmalloc((size_t)num_threads * sizeof(ParArg));
+    int chunk = n / num_threads;
+    int rem   = n % num_threads;
+    int pos   = 0;
+    for (int t = 0; t < num_threads; t++) {
+        int this_chunk        = chunk + (t < rem ? 1 : 0);
+        args[t].fn            = fn;
+        args[t].iter_start    = pos;
+        args[t].iter_end      = pos + this_chunk;
+        args[t].range_offset  = start_v;
+        args[t].results       = results;
+        args[t].had_error     = 0;
+        args[t].error[0]      = '\0';
+        args[t].any_return    = 0;
+        pos += this_chunk;
+    }
+
+    /* Suspend GC and launch workers */
+    __atomic_store_n(&g_gc_suspended, 1, __ATOMIC_RELEASE);
+
+    pthread_t *threads = xmalloc((size_t)num_threads * sizeof(pthread_t));
+    for (int t = 0; t < num_threads; t++)
+        pthread_create(&threads[t], NULL, parallel_worker, &args[t]);
+    for (int t = 0; t < num_threads; t++)
+        pthread_join(threads[t], NULL);
+
+    __atomic_store_n(&g_gc_suspended, 0, __ATOMIC_RELEASE);
+
+    /* Collect results and check for errors */
+    char *first_error = NULL;
+    int   any_return  = 0;
+    for (int t = 0; t < num_threads; t++) {
+        if (args[t].had_error && !first_error) first_error = args[t].error;
+        if (args[t].any_return) any_return = 1;
+    }
+
+    free(threads);
+
+    if (first_error) {
+        /* Clean up result slots before dying */
+        char errbuf[512];
+        snprintf(errbuf, sizeof(errbuf), "%s", first_error);
+        free(args);
+        for (int i = 0; i < n; i++) val_decref(results[i]);
+        free(results);
+        die("%s", errbuf);
+        return val_none(); /* unreachable */
+    }
+
+    free(args);
+
+    /* If no :: was hit in any iteration, return none (like sequential loop) */
+    if (!any_return) {
+        for (int i = 0; i < n; i++) val_decref(results[i]);
+        free(results);
+        return val_none();
+    }
+
+    /* Build result list in original index order */
+    HowList *out = list_new();
+    for (int i = 0; i < n; i++) {
+        list_push(out, results[i]);
+        val_decref(results[i]);
+    }
+    free(results);
+    Value *ret = val_list(out);
+    list_decref(out);
+    return ret;
+}
+
 /* Evaluate a function call given a Value callee */
 Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line) {
     if (callee->type==VT_BUILTIN) {
@@ -563,6 +731,9 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
     }
     if (callee->type==VT_FUNC) {
         HowFunc *fn = callee->func;
+        if (fn->is_forrange && fn->is_parallel) {
+            return run_parallel_loop(fn, sig);
+        }
         if (fn->is_forrange) {
             int start_v = 0;
             if (fn->fr_start) {
@@ -868,7 +1039,9 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
     Env *inst_env = inst_env_new(inst, init_env);
     GC_ROOT_ENV(inst_env);
     inst->inst_env = inst_env; inst_env->refcount++;
+    pthread_mutex_lock(&g_alloc_mutex);
     inst->gc_next = g_all_instances; g_all_instances = inst; g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
 
     /* Re-wrap method closures so they close over inst_env */
     for (int i=0;i<fields->len;i++) {
@@ -889,7 +1062,9 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
             /* Register newfn AFTER val_new to avoid GC sweeping it before its Value exists */
             Value *nv = val_new(VT_FUNC);
             nv->func = newfn;
+            pthread_mutex_lock(&g_alloc_mutex);
             newfn->gc_next = g_all_funcs; g_all_funcs = newfn; g_gc_allocations++;
+            pthread_mutex_unlock(&g_alloc_mutex);
             fields->pairs[i].val = nv;
             val_decref(v);
         }
@@ -1034,7 +1209,9 @@ static void exec_import(const char *modname, const char *alias, Env *env) {
     mod->env = pub_env;
     mod->refcount = 1;
     /* Now mod->env is set; register with GC so gc_mark_module can trace pub_env */
+    pthread_mutex_lock(&g_alloc_mutex);
     mod->gc_next = g_all_modules; g_all_modules = mod; g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
 
     Value *modval = val_new(VT_MODULE); modval->mod = mod;
     /* Register in module cache to prevent re-loading and circular import loops */

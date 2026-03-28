@@ -11,7 +11,8 @@ syntax highlighting and lightweight lint diagnostics.
 
 - Registers the `howlang` language for `.how` files
 - Syntax highlighting for:
-  - Keywords: `var`, `how`, `where`, `as`, `break`, `and`, `or`, `not`
+  - Keywords: `var`, `how`, `where`, `as`, `break`, `continue`, `and`, `or`, `not`
+  - Parallel loop marker: `^`
   - Constants: `true`, `false`, `none`
   - Strings (single and double-quoted), numbers, operators, comments
   - Function calls and class instantiation
@@ -26,7 +27,8 @@ syntax highlighting and lightweight lint diagnostics.
   | HL102 | Error | `var` declaration missing `=` |
   | HL103 | Error | `how` not followed by a module identifier |
   | HL104 | Warning | Extra tokens after `how moduleName` (beyond `as alias`) |
-  | HL105 | Warning | `break` used outside a likely loop context |
+  | HL105 | Warning | `break` or `continue` used outside a likely loop context |
+  | HL106 | Error | `break` inside a parallel loop `^{...}` (not allowed) |
   | HL201 | Info | Suspicious `:` (did you mean `::` or a slice?) |
 
 ---
@@ -42,6 +44,22 @@ var total = 0
 }
 # total == 10
 ```
+
+Add `^` between `)` and `{` to run iterations in parallel:
+
+```
+# Parallel map — all iterations run concurrently, results in index order
+var squares = (i=0:len(nums))^{ :: nums(i) * nums(i) }()
+
+# par(list, fn) is sugar for the parallel-map pattern
+var doubled = par(nums, (x){ :: x * 2 })
+```
+
+Parallel loop rules:
+- Reading outer variables is allowed
+- Writing to outer variables is a runtime error
+- `break` is not allowed; `continue` works normally
+- Returns a list if any iteration used `::`, otherwise `none`
 
 The unbounded auto-loop uses `(:)={ }`:
 

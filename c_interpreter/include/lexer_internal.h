@@ -51,6 +51,7 @@ typedef enum
     TT_NOT,
     TT_DBANG, /* !! — throw operator */
     TT_CATCH, /* catch keyword */
+    TT_CARET, /* ^ — parallel loop marker */
 } TT;
 
 typedef struct
