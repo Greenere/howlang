@@ -49,6 +49,200 @@ static void   exec_stmt(Node *node, Env *env, Signal *sig);
 void          exec_body(Node *body, Env *env, Signal *sig);
 static void   exec_import(const char *modname, const char *alias, Env *env);
 
+/* ── AD tape ─────────────────────────────────────────────────────────────── */
+
+typedef struct {
+    int    out_id;
+    char   op[8];
+    int    in_ids[2];
+    double in_vals[2];
+} TapeEntry;
+
+typedef struct {
+    Env   *env;
+    int    slot;
+    Value *original;
+} SavedVar;
+
+static TapeEntry *g_tape       = NULL;
+static int        g_tape_len   = 0;
+static int        g_tape_cap   = 0;
+static double    *g_tape_vals  = NULL;
+static double    *g_tape_grads = NULL;
+static int        g_tape_next_id = 0;
+static int        g_tape_vsize   = 0;
+int               g_tape_active  = 0;  /* 1 = recording reverse-mode tape */
+
+#define IS_TAPE_VAL(v)  ((v)->type==VT_DUAL && (v)->dual.tan < -0.5)
+#define TAPE_ID(v)      ((int)(-(v)->dual.tan) - 1)
+
+static void tape_ensure_entry(void) {
+    if (g_tape_len >= g_tape_cap) {
+        g_tape_cap = g_tape_cap ? g_tape_cap * 2 : 256;
+        g_tape = xrealloc(g_tape, (size_t)g_tape_cap * sizeof(TapeEntry));
+    }
+}
+
+static void tape_ensure_val(int id) {
+    if (id >= g_tape_vsize) {
+        int ns = g_tape_vsize ? g_tape_vsize * 2 : 256;
+        while (ns <= id) ns *= 2;
+        g_tape_vals  = xrealloc(g_tape_vals,  (size_t)ns * sizeof(double));
+        g_tape_grads = xrealloc(g_tape_grads, (size_t)ns * sizeof(double));
+        for (int i = g_tape_vsize; i < ns; i++) {
+            g_tape_vals[i] = 0.0; g_tape_grads[i] = 0.0;
+        }
+        g_tape_vsize = ns;
+    }
+}
+
+static Value *tape_new_val(double primal) {
+    int id = g_tape_next_id++;
+    tape_ensure_val(id);
+    g_tape_vals[id]  = primal;
+    g_tape_grads[id] = 0.0;
+    return val_dual(primal, -(double)(id + 1));
+}
+
+static Value *dual_binop(Value *l, Value *r, const char *op, int line) {
+    double lv = (l->type==VT_DUAL) ? l->dual.val : l->nval;
+    double lt = (l->type==VT_DUAL) ? l->dual.tan : 0.0;
+    double rv = (r->type==VT_DUAL) ? r->dual.val : r->nval;
+    double rt = (r->type==VT_DUAL) ? r->dual.tan : 0.0;
+
+    if (!strcmp(op,"==")) return val_bool(lv==rv);
+    if (!strcmp(op,"!=")) return val_bool(lv!=rv);
+    if (!strcmp(op,"<"))  return val_bool(lv<rv);
+    if (!strcmp(op,">"))  return val_bool(lv>rv);
+    if (!strcmp(op,"<=")) return val_bool(lv<=rv);
+    if (!strcmp(op,">=")) return val_bool(lv>=rv);
+
+    double out_v, out_t;
+    if      (!strcmp(op,"+")) { out_v=lv+rv; out_t=lt+rt; }
+    else if (!strcmp(op,"-")) { out_v=lv-rv; out_t=lt-rt; }
+    else if (!strcmp(op,"*")) { out_v=lv*rv; out_t=lt*rv+lv*rt; }
+    else if (!strcmp(op,"/")) {
+        if (rv==0.0) die_at(line,0,"division by zero");
+        out_v=lv/rv; out_t=(lt*rv - lv*rt)/(rv*rv);
+    }
+    else if (!strcmp(op,"%")) { out_v=fmod(lv,rv); out_t=lt; }
+    else { die_at(line,0,"unknown op '%s' on dual",op); return val_none(); }
+
+    if (g_tape_active) {
+        tape_ensure_entry();
+        TapeEntry *e = &g_tape[g_tape_len];
+        e->out_id    = g_tape_next_id;
+        strncpy(e->op, op, 7); e->op[7]='\0';
+        e->in_ids[0] = IS_TAPE_VAL(l) ? TAPE_ID(l) : -1;
+        e->in_ids[1] = IS_TAPE_VAL(r) ? TAPE_ID(r) : -1;
+        e->in_vals[0] = lv; e->in_vals[1] = rv;
+        g_tape_len++;
+        return tape_new_val(out_v);
+    }
+    return val_dual(out_v, out_t);
+}
+
+static void tape_backward(void) {
+    for (int i = g_tape_len - 1; i >= 0; i--) {
+        TapeEntry *e = &g_tape[i];
+        if (e->out_id >= g_tape_vsize) continue;
+        double g = g_tape_grads[e->out_id];
+        if (g == 0.0) continue;
+        double lv=e->in_vals[0], rv=e->in_vals[1];
+        double gl=0.0, gr=0.0;
+        if      (!strcmp(e->op,"+"))  { gl=g;       gr=g; }
+        else if (!strcmp(e->op,"-"))  { gl=g;       gr=-g; }
+        else if (!strcmp(e->op,"*"))  { gl=g*rv;    gr=g*lv; }
+        else if (!strcmp(e->op,"/"))  { gl=g/rv;    gr=-g*lv/(rv*rv); }
+        else if (!strcmp(e->op,"%"))  { gl=g; }
+        else if (!strcmp(e->op,"neg")){ gl=-g; }
+        if (e->in_ids[0]>=0 && e->in_ids[0]<g_tape_vsize) g_tape_grads[e->in_ids[0]]+=gl;
+        if (e->in_ids[1]>=0 && e->in_ids[1]<g_tape_vsize) g_tape_grads[e->in_ids[1]]+=gr;
+    }
+}
+
+Value *compute_grad_closure(Value *primal_fn, Signal *sig) {
+    if (primal_fn->type != VT_FUNC) return val_none();
+    HowFunc *fn = primal_fn->func;
+
+    g_tape_len = 0; g_tape_next_id = 0;
+    if (g_tape_vsize > 0) memset(g_tape_grads, 0, (size_t)g_tape_vsize * sizeof(double));
+
+    int saved_cap = 64, saved_len = 0;
+    SavedVar *saved = xmalloc((size_t)saved_cap * sizeof(SavedVar));
+
+    HowMap *vtoi_map = map_new();
+    Value  *vtoi_val = val_map(vtoi_map);
+    map_decref(vtoi_map);
+    GC_ROOT_VALUE(vtoi_val);
+
+    for (Env *e = fn->closure; e; e = e->parent) {
+        for (int i = 0; i < e->len; i++) {
+            if (e->entries[i].val->type == VT_NUM) {
+                int tape_id = g_tape_next_id;
+                tape_ensure_val(tape_id);
+                g_tape_vals[tape_id]  = e->entries[i].val->nval;
+                g_tape_grads[tape_id] = 0.0;
+                g_tape_next_id++;
+                if (saved_len >= saved_cap) {
+                    saved_cap *= 2;
+                    saved = xrealloc(saved, (size_t)saved_cap * sizeof(SavedVar));
+                }
+                saved[saved_len].env      = e;
+                saved[saved_len].slot     = i;
+                saved[saved_len].original = val_incref(e->entries[i].val);
+                saved_len++;
+                val_decref(e->entries[i].val);
+                e->entries[i].val = val_dual(saved[saved_len-1].original->nval,
+                                             -(double)(tape_id + 1));
+                char id_str[32]; snprintf(id_str, sizeof(id_str), "%d", tape_id);
+                Value *iv = val_str(id_str);
+                map_set(vtoi_val->map, e->entries[i].key, iv);
+                val_decref(iv);
+            }
+        }
+    }
+
+    g_tape_active = 1;
+    Value *result = eval_call_val(primal_fn, NULL, 0, sig, 0);
+    g_tape_active = 0;
+
+    for (int i = 0; i < saved_len; i++) {
+        val_decref(saved[i].env->entries[saved[i].slot].val);
+        saved[i].env->entries[saved[i].slot].val = saved[i].original;
+    }
+    free(saved);
+
+    if (sig->type != SIG_NONE || !result || !IS_TAPE_VAL(result)) {
+        if (result) val_decref(result);
+        GC_UNROOT_VALUE(); val_decref(vtoi_val);
+        return val_none();
+    }
+
+    int out_id = TAPE_ID(result);
+    val_decref(result);
+    if (out_id < g_tape_vsize) g_tape_grads[out_id] = 1.0;
+    tape_backward();
+
+    HowMap *gmap = map_new();
+    Value  *gval = val_map(gmap);
+    map_decref(gmap);
+    GC_ROOT_VALUE(gval);
+
+    for (int i = 0; i < vtoi_val->map->len; i++) {
+        int tid = atoi(vtoi_val->map->pairs[i].val->sval);
+        double gv = (tid < g_tape_vsize) ? g_tape_grads[tid] : 0.0;
+        Value *gn = val_num(gv);
+        map_set(gval->map, vtoi_val->map->pairs[i].key, gn);
+        val_decref(gn);
+    }
+
+    GC_UNROOT_VALUE();
+    GC_UNROOT_VALUE();
+    val_decref(vtoi_val);
+    return gval;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Interpreter core                                                            */
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -140,6 +334,16 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         Value *r = eval(node->binop.right, env, sig);
         if (sig->type!=SIG_NONE) { GC_UNROOT_VALUE(); val_decref(l); return r; }
         GC_ROOT_VALUE(r);
+        /* Dual number arithmetic — forward-mode or tape AD */
+        if (l->type==VT_DUAL || r->type==VT_DUAL) {
+            if ((l->type==VT_NUM||l->type==VT_DUAL) &&
+                (r->type==VT_NUM||r->type==VT_DUAL)) {
+                Value *res = dual_binop(l, r, op, node->line);
+                GC_UNROOT_VALUE(); GC_UNROOT_VALUE();
+                val_decref(l); val_decref(r);
+                return res;
+            }
+        }
         Value *res;
         if (!strcmp(op,"+")) {
             if (l->type==VT_LIST && r->type==VT_LIST) {
@@ -209,6 +413,22 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         const char *op = node->binop.op;
         Value *res;
         if (!strcmp(op,"-")) {
+            if (v->type==VT_DUAL) {
+                Value *dr;
+                if (g_tape_active && IS_TAPE_VAL(v)) {
+                    tape_ensure_entry();
+                    TapeEntry *te = &g_tape[g_tape_len];
+                    te->out_id    = g_tape_next_id;
+                    strncpy(te->op, "neg", 7); te->op[7]='\0';
+                    te->in_ids[0] = TAPE_ID(v); te->in_ids[1] = -1;
+                    te->in_vals[0] = v->dual.val; te->in_vals[1] = 0.0;
+                    g_tape_len++;
+                    dr = tape_new_val(-v->dual.val);
+                } else {
+                    dr = val_dual(-v->dual.val, -v->dual.tan);
+                }
+                GC_UNROOT_VALUE(); val_decref(v); return dr;
+            }
             if (v->type!=VT_NUM) die_at(node->line, 0, "unary '-' requires a number");
             res=val_num(-v->nval);
         } else {
@@ -419,6 +639,17 @@ static Value *eval(Node *node, Env *env, Signal *sig) {
         pthread_mutex_lock(&g_alloc_mutex);
         fn->gc_next = g_all_funcs; g_all_funcs = fn; g_gc_allocations++;
         pthread_mutex_unlock(&g_alloc_mutex);
+        fn->is_grad = 0;
+        fn->grad_fn = NULL;
+        if (node->func.grad_body) {
+            Signal ginner = {SIG_NONE, NULL};
+            Value *gbv = eval(node->func.grad_body, env, &ginner);
+            if (ginner.type == SIG_NONE && gbv && gbv->type == VT_FUNC) {
+                fn->grad_fn = gbv->func;
+                fn->grad_fn->refcount++;
+            }
+            val_decref(gbv);
+        }
         return v;
     }
 
@@ -731,6 +962,101 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
     }
     if (callee->type==VT_FUNC) {
         HowFunc *fn = callee->func;
+        if (fn->is_grad) {
+            Value *primal_v = env_get(fn->closure, "__primal__");
+            if (!primal_v) die_at(line, 0, "grad wrapper lost its primal");
+
+            /* Custom grad block */
+            if (primal_v->type==VT_FUNC && primal_v->func->grad_fn) {
+                HowFunc *cgfn = primal_v->func->grad_fn;
+                Value **gargs = xmalloc((size_t)(argc + 1) * sizeof(Value*));
+                for (int i=0; i<argc; i++) gargs[i] = args[i];
+                Value *g_up = val_num(1.0);
+                gargs[argc] = g_up;
+                /* Wrap cgfn in a temporary Value (cgfn already in g_all_funcs) */
+                Value *gfn_wrap = val_new(VT_FUNC);
+                gfn_wrap->func = cgfn; cgfn->refcount++;
+                GC_ROOT_VALUE(gfn_wrap);
+                Value *gres = eval_call_val(gfn_wrap, gargs, argc+1, sig, line);
+                GC_UNROOT_VALUE();
+                cgfn->refcount--;
+                val_decref(gfn_wrap);
+                val_decref(g_up);
+                free(gargs);
+                return gres;
+            }
+
+            /* Zero-arg closure: reverse-mode */
+            if (argc == 0) {
+                return compute_grad_closure(primal_v, sig);
+            }
+
+            /* Single numeric arg: forward-mode */
+            if (argc == 1 && (args[0]->type == VT_NUM || args[0]->type == VT_DUAL)) {
+                double xv = (args[0]->type == VT_DUAL) ? args[0]->dual.val : args[0]->nval;
+                double xt = (args[0]->type == VT_DUAL) ? args[0]->dual.tan : 0.0;
+                Value *da = val_dual(xv, 1.0);
+                GC_ROOT_VALUE(da);
+                Value *res = eval_call_val(primal_v, &da, 1, sig, line);
+                GC_UNROOT_VALUE(); val_decref(da);
+                if (sig->type != SIG_NONE) return res;
+                double gr;
+                if (res->type == VT_DUAL) {
+                    gr = res->dual.tan;
+                } else if (res->type == VT_NUM) {
+                    gr = 0.0;
+                } else {
+                    val_decref(res); return val_none();
+                }
+                val_decref(res);
+                /* If input was dual (nested grad), compute d²f/dx² via second pass */
+                if (args[0]->type == VT_DUAL) {
+                    const double h = 1e-5;
+                    Value *da2 = val_dual(xv + h, 1.0);
+                    GC_ROOT_VALUE(da2);
+                    Signal sig2 = {SIG_NONE, NULL};
+                    Value *res2 = eval_call_val(primal_v, &da2, 1, &sig2, line);
+                    GC_UNROOT_VALUE(); val_decref(da2);
+                    double gr2 = (res2 && res2->type == VT_DUAL) ? res2->dual.tan :
+                                 (res2 && res2->type == VT_NUM ? 0.0 : gr);
+                    if (res2) val_decref(res2);
+                    double dgr_dx = (gr2 - gr) / h;
+                    return val_dual(gr, dgr_dx * xt);
+                }
+                return val_num(gr);
+            }
+
+            /* Multi-arg: list of partial derivatives */
+            if (argc > 1) {
+                int all_num = 1;
+                for (int i=0; i<argc; i++) if (args[i]->type!=VT_NUM) { all_num=0; break; }
+                if (all_num) {
+                    HowList *gl = list_new();
+                    for (int i=0; i<argc; i++) {
+                        Value **da = xmalloc((size_t)argc * sizeof(Value*));
+                        for (int j=0; j<argc; j++)
+                            da[j] = (j==i) ? val_dual(args[j]->nval,1.0)
+                                           : val_dual(args[j]->nval,0.0);
+                        Signal inner2 = {SIG_NONE, NULL};
+                        Value *res = eval_call_val(primal_v, da, argc, &inner2, line);
+                        for (int j=0; j<argc; j++) val_decref(da[j]);
+                        free(da);
+                        if (inner2.type != SIG_NONE) {
+                            if (inner2.retval) val_decref(inner2.retval);
+                            list_decref(gl);
+                            return res;
+                        }
+                        double gv = (res->type==VT_DUAL) ? res->dual.tan : 0.0;
+                        val_decref(res);
+                        Value *gn = val_num(gv);
+                        list_push(gl, gn); val_decref(gn);
+                    }
+                    Value *rv = val_list(gl); list_decref(gl); return rv;
+                }
+            }
+
+            return val_none();
+        }
         if (fn->is_forrange && fn->is_parallel) {
             return run_parallel_loop(fn, sig);
         }
@@ -1048,15 +1374,20 @@ static Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *s
         Value *v = fields->pairs[i].val;
         if (v && v->type==VT_FUNC) {
             HowFunc *oldfn = v->func;
+            /* Grad wrappers keep their own closure (__primal__ env) —
+               re-wrapping would clobber is_grad and break the primal lookup. */
+            if (oldfn->is_grad) continue;
             StrList   saved_params   = strlist_clone(oldfn->params);
             NodeList  saved_branches = oldfn->branches;
             int       saved_is_loop  = oldfn->is_loop;
+            HowFunc  *saved_grad_fn  = oldfn->grad_fn;
             inst_env->refcount++;
             HowFunc *newfn = xmalloc(sizeof(*newfn));
             memset(newfn, 0, sizeof(*newfn));
             newfn->params   = saved_params;
             newfn->branches = saved_branches;
             newfn->is_loop  = saved_is_loop;
+            newfn->grad_fn  = saved_grad_fn;
             newfn->closure  = inst_env;
             newfn->refcount = 1;
             /* Register newfn AFTER val_new to avoid GC sweeping it before its Value exists */

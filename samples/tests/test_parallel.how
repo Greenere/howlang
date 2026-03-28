@@ -1,97 +1,385 @@
 # test_parallel.how — tests for parallel for-range (^{}) and par() builtin
+#
+# Sections:
+#   1.  Basic parallel map          — results in index order
+#   2.  Reading outer scope         — closed-over variables
+#   3.  Edge cases                  — empty range, no ::, single iteration
+#   4.  Non-zero and computed range — start/stop from expressions
+#   5.  continue                    — skipped slots become none
+#   6.  Nested expressions          — local vars, multi-step bodies
+#   7.  Large range                 — correctness at scale
+#   8.  Composing results           — chained parallel operations
+#   9.  par() builtin               — list + function form
+#  10.  par() edge cases            — empty list, single-element, identity
+#  11.  Equivalence                 — parallel results match sequential
 
-var pass = 0
-var fail = 0
+var TOTAL  = 0
+var PASSED = 0
 
-var check = (label, got, expected) {
-    got == expected : {
-        pass += 1
-    },
-    got != expected : {
-        fail += 1,
-        print("FAIL:", label, "got:", got, "expected:", expected)
-    }
+var line = (){ print("────────────────────────────────────────────────────────") }
+
+var ok = (name){
+    TOTAL  += 1,
+    PASSED += 1,
+    print("PASS: " + name)
 }
 
-# ── Basic parallel map ──────────────────────────────────────────────────────
+var bad = (name, got, expected){
+    TOTAL += 1,
+    print("FAIL: " + name + " | got=" + str(got) + " expected=" + str(expected))
+}
+
+var assert_eq = (name, got, expected){
+    got == expected: ok(name),
+    got != expected: bad(name, got, expected)
+}
+
+var assert_close = (name, got, expected){
+    var diff = got - expected,
+    diff < 0: diff = diff * -1,
+    diff < 0.001: ok(name),
+    diff >= 0.001: bad(name, got, expected)
+}
+
+
+# ── Section 1: Basic parallel map ────────────────────────────────────────────
+print("=== 1. Basic parallel map ===")
+line()
 
 var nums = {1, 2, 3, 4, 5}
-var squares = (i=0:len(nums))^{ :: nums(i) * nums(i) }()
-check("parallel map len", len(squares), 5)
-check("parallel map 0", squares(0), 1)
-check("parallel map 1", squares(1), 4)
-check("parallel map 2", squares(2), 9)
-check("parallel map 3", squares(3), 16)
-check("parallel map 4", squares(4), 25)
 
-# ── Reading outer scope (multiplier) ────────────────────────────────────────
+var squares = (i=0:len(nums))^{ :: nums(i) * nums(i) }()
+assert_eq("squares len",  len(squares), 5)
+assert_eq("squares[0]",   squares(0),   1)
+assert_eq("squares[1]",   squares(1),   4)
+assert_eq("squares[2]",   squares(2),   9)
+assert_eq("squares[3]",   squares(3),   16)
+assert_eq("squares[4]",   squares(4),   25)
+
+# Results must be in original index order, regardless of thread scheduling
+var out_of_order_check = (i=0:8)^{ :: i * 3 }()
+assert_eq("order preserved [0]", out_of_order_check(0), 0)
+assert_eq("order preserved [1]", out_of_order_check(1), 3)
+assert_eq("order preserved [3]", out_of_order_check(3), 9)
+assert_eq("order preserved [7]", out_of_order_check(7), 21)
+
+
+# ── Section 2: Reading outer scope ────────────────────────────────────────────
+print("=== 2. Reading outer scope ===")
+line()
 
 var multiplier = 10
 var scaled = (i=0:len(nums))^{ :: nums(i) * multiplier }()
-check("outer read len", len(scaled), 5)
-check("outer read 0", scaled(0), 10)
-check("outer read 4", scaled(4), 50)
+assert_eq("outer read len",  len(scaled), 5)
+assert_eq("outer read [0]",  scaled(0),   10)
+assert_eq("outer read [2]",  scaled(2),   30)
+assert_eq("outer read [4]",  scaled(4),   50)
 
-# ── Empty range returns none ─────────────────────────────────────────────────
+# Multiple outer variables
+var base = 100
+var step_size = 3
+var seq = (i=0:5)^{ :: base + i * step_size }()
+assert_eq("multi-outer [0]", seq(0), 100)
+assert_eq("multi-outer [1]", seq(1), 103)
+assert_eq("multi-outer [4]", seq(4), 112)
 
+# Outer list access
+var factors = {2, 3, 5, 7, 11}
+var products = (i=0:5)^{ :: factors(i) * factors(i) }()
+assert_eq("outer list [0]", products(0), 4)
+assert_eq("outer list [2]", products(2), 25)
+assert_eq("outer list [4]", products(4), 121)
+
+# Outer function
+var triple = (x){ :: x * 3 }
+var tripled = (i=0:4)^{ :: triple(i) }()
+assert_eq("outer fn [0]", tripled(0), 0)
+assert_eq("outer fn [3]", tripled(3), 9)
+
+
+# ── Section 3: Edge cases ─────────────────────────────────────────────────────
+print("=== 3. Edge cases ===")
+line()
+
+# Empty range → none
 var empty_result = (i=0:0)^{ :: i }()
-check("empty range", empty_result, none)
+assert_eq("empty range → none", empty_result, none)
 
-# ── No :: in body returns none ───────────────────────────────────────────────
+# No :: in body → none
+var no_ret = (i=0:5)^{ var x = i * 2 }()
+assert_eq("no :: → none", no_ret, none)
 
-var side_only = (i=0:3)^{ var x = i * 2 }()
-check("no return", side_only, none)
+# Single iteration
+var one = (i=42:43)^{ :: i * 2 }()
+assert_eq("single iter len", len(one), 1)
+assert_eq("single iter val", one(0),   84)
 
-# ── Non-zero start ────────────────────────────────────────────────────────────
+# Range of 1 from 0
+var one2 = (i=0:1)^{ :: i + 99 }()
+assert_eq("range 0:1 val", one2(0), 99)
+
+# Stop equals start → none (empty)
+var degenerate = (i=5:5)^{ :: i }()
+assert_eq("start==stop → none", degenerate, none)
+
+
+# ── Section 4: Non-zero and computed range ────────────────────────────────────
+print("=== 4. Non-zero and computed range ===")
+line()
 
 var from_five = (i=5:8)^{ :: i }()
-check("start 5 len", len(from_five), 3)
-check("start 5 val 0", from_five(0), 5)
-check("start 5 val 1", from_five(1), 6)
-check("start 5 val 2", from_five(2), 7)
+assert_eq("start=5 len",  len(from_five), 3)
+assert_eq("start=5 [0]",  from_five(0),   5)
+assert_eq("start=5 [1]",  from_five(1),   6)
+assert_eq("start=5 [2]",  from_five(2),   7)
 
-# ── Single iteration ─────────────────────────────────────────────────────────
+# Start and stop from variables
+var lo = 3
+var hi = 7
+var var_range = (i=lo:hi)^{ :: i * i }()
+assert_eq("var range len",  len(var_range), 4)
+assert_eq("var range [0]",  var_range(0),   9)
+assert_eq("var range [3]",  var_range(3),   36)
 
-var one = (i=0:1)^{ :: i * 99 }()
-check("single iter len", len(one), 1)
-check("single iter val", one(0), 0)
+# Negative start
+var neg_start = (i=-3:2)^{ :: i }()
+assert_eq("neg start len",  len(neg_start), 5)
+assert_eq("neg start [0]",  neg_start(0),   -3)
+assert_eq("neg start [3]",  neg_start(3),    0)
+assert_eq("neg start [4]",  neg_start(4),    1)
 
-# ── Continue in parallel body ─────────────────────────────────────────────────
+# Range driven by len of a list
+var data = {10, 20, 30, 40, 50, 60}
+var doubled = (i=0:len(data))^{ :: data(i) * 2 }()
+assert_eq("len-driven [0]", doubled(0), 20)
+assert_eq("len-driven [5]", doubled(5), 120)
 
+
+# ── Section 5: continue ───────────────────────────────────────────────────────
+print("=== 5. continue ===")
+line()
+
+# continue skips :: → that slot stays none
 var evens = (i=0:6)^{
-    i % 2 != 0 : continue,
+    i % 2 != 0: continue,
     :: i
 }()
-check("continue len", len(evens), 6)
-check("continue 0", evens(0), 0)
-check("continue 1", evens(1), none)
-check("continue 2", evens(2), 2)
-check("continue 4", evens(4), 4)
+assert_eq("continue len",    len(evens), 6)
+assert_eq("continue even 0", evens(0),   0)
+assert_eq("continue odd  1", evens(1),   none)
+assert_eq("continue even 2", evens(2),   2)
+assert_eq("continue odd  3", evens(3),   none)
+assert_eq("continue even 4", evens(4),   4)
+assert_eq("continue odd  5", evens(5),   none)
 
-# ── par() builtin ─────────────────────────────────────────────────────────────
+# All iterations skip → no :: fires → result is none
+var all_skip = (i=0:4)^{
+    i >= 0: continue,
+    :: i
+}()
+assert_eq("all-skip → none", all_skip, none)
+
+# Multiple continue guards — only multiples of 3 return
+var mult3 = (i=0:9)^{
+    i % 3 != 0: continue,
+    :: i
+}()
+assert_eq("mult3 [0]",  mult3(0),  0)
+assert_eq("mult3 [1]",  mult3(1),  none)
+assert_eq("mult3 [2]",  mult3(2),  none)
+assert_eq("mult3 [3]",  mult3(3),  3)
+assert_eq("mult3 [6]",  mult3(6),  6)
+assert_eq("mult3 [8]",  mult3(8),  none)
+
+
+# ── Section 6: Nested expressions and local variables ────────────────────────
+print("=== 6. Nested expressions and local variables ===")
+line()
+
+# Multi-step body with local vars
+var computed = (i=0:5)^{
+    var a = i * i,
+    var b = a + i,
+    :: b
+}()
+assert_eq("local vars [0]", computed(0), 0)
+assert_eq("local vars [1]", computed(1), 2)
+assert_eq("local vars [2]", computed(2), 6)
+assert_eq("local vars [3]", computed(3), 12)
+assert_eq("local vars [4]", computed(4), 20)
+
+# Calling a function from inside the body
+var clamp = (x, lo2, hi2){
+    x < lo2 :: lo2,
+    x > hi2 :: hi2,
+    :: x
+}
+var clamped = (i=0:6)^{ :: clamp(i, 1, 4) }()
+assert_eq("fn call [0]", clamped(0), 1)
+assert_eq("fn call [1]", clamped(1), 1)
+assert_eq("fn call [2]", clamped(2), 2)
+assert_eq("fn call [4]", clamped(4), 4)
+assert_eq("fn call [5]", clamped(5), 4)
+
+# Conditional inside body
+var abs_par = (i=-3:4)^{
+    var v = i,
+    v < 0: v = v * -1,
+    :: v
+}()
+assert_eq("conditional body [-3→0]", abs_par(0), 3)
+assert_eq("conditional body [-2→1]", abs_par(1), 2)
+assert_eq("conditional body [ 0→3]", abs_par(3), 0)
+assert_eq("conditional body [ 3→6]", abs_par(6), 3)
+
+
+# ── Section 7: Large range ────────────────────────────────────────────────────
+print("=== 7. Large range ===")
+line()
+
+var N = 1000
+var big = (i=0:N)^{ :: i }()
+assert_eq("large len",    len(big), 1000)
+assert_eq("large [0]",    big(0),   0)
+assert_eq("large [1]",    big(1),   1)
+assert_eq("large [999]",  big(999), 999)
+assert_eq("large [500]",  big(500), 500)
+
+# Sum via sequential reduce over parallel results
+var big_sum = 0
+(i=0:len(big)){ big_sum += big(i) }()
+assert_eq("large sum = N*(N-1)/2", big_sum, 499500)
+
+# Squares of 0..99 — verify a few values and count
+var sq100 = (i=0:100)^{ :: i * i }()
+assert_eq("sq100 len",    len(sq100), 100)
+assert_eq("sq100 [0]",    sq100(0),   0)
+assert_eq("sq100 [10]",   sq100(10),  100)
+assert_eq("sq100 [99]",   sq100(99),  9801)
+
+
+# ── Section 8: Composing parallel results ─────────────────────────────────────
+print("=== 8. Composing parallel results ===")
+line()
+
+# Two parallel passes chained
+var raw   = {3, 1, 4, 1, 5, 9, 2, 6}
+var pass1 = (i=0:len(raw))^{ :: raw(i) * 2 }()     # double
+var pass2 = (i=0:len(pass1))^{ :: pass1(i) + 1 }() # add 1
+assert_eq("chained [0]", pass2(0), 7)   # 3*2+1
+assert_eq("chained [2]", pass2(2), 9)   # 4*2+1
+assert_eq("chained [5]", pass2(5), 19)  # 9*2+1
+
+# Parallel zip — combine two lists element-wise
+var xs = {1, 2, 3, 4, 5}
+var ys = {5, 4, 3, 2, 1}
+var dot_terms = (i=0:len(xs))^{ :: xs(i) * ys(i) }()
+var dot_product = 0
+(i=0:len(dot_terms)){ dot_product += dot_terms(i) }()
+assert_eq("parallel dot product", dot_product, 35)   # 5+8+9+8+5
+
+# Parallel filter using mask pattern (same as map_fn in mapreduce.how)
+var src = {1, 2, 3, 4, 5, 6, 7, 8}
+var mask = (i=0:len(src))^{ :: src(i) % 2 == 0 }()
+var evens2 = list()
+(i=0:len(src)){ mask(i): push(evens2, src(i)) }()
+assert_eq("par filter len",  len(evens2), 4)
+assert_eq("par filter [0]",  evens2(0),   2)
+assert_eq("par filter [3]",  evens2(3),   8)
+
+
+# ── Section 9: par() builtin ─────────────────────────────────────────────────
+print("=== 9. par() builtin ===")
+line()
 
 var double_fn = (x){ :: x * 2 }
-var doubled = par({1, 2, 3, 4, 5}, double_fn)
-check("par len", len(doubled), 5)
-check("par 0", doubled(0), 2)
-check("par 1", doubled(1), 4)
-check("par 4", doubled(4), 10)
+var sq_fn     = (x){ :: x * x }
+var neg_fn    = (x){ :: -x }
 
+var doubled2 = par({1, 2, 3, 4, 5}, double_fn)
+assert_eq("par double len",  len(doubled2), 5)
+assert_eq("par double [0]",  doubled2(0),   2)
+assert_eq("par double [2]",  doubled2(2),   6)
+assert_eq("par double [4]",  doubled2(4),   10)
+
+var sq_par = par({2, 3, 4, 5}, sq_fn)
+assert_eq("par square [0]",  sq_par(0), 4)
+assert_eq("par square [1]",  sq_par(1), 9)
+assert_eq("par square [3]",  sq_par(3), 25)
+
+var negs = par({1, -2, 3, -4}, neg_fn)
+assert_eq("par negate [0]",  negs(0),  -1)
+assert_eq("par negate [1]",  negs(1),   2)
+assert_eq("par negate [2]",  negs(2),  -3)
+assert_eq("par negate [3]",  negs(3),   4)
+
+# par with lambda
+var par_lambda = par({10, 20, 30}, (x){ :: x + 5 })
+assert_eq("par lambda [0]",  par_lambda(0), 15)
+assert_eq("par lambda [2]",  par_lambda(2), 35)
+
+# par with outer closure
+var offset = 7
+var par_closure = par({1, 2, 3}, (x){ :: x + offset })
+assert_eq("par outer closure [0]", par_closure(0), 8)
+assert_eq("par outer closure [2]", par_closure(2), 10)
+
+
+# ── Section 10: par() edge cases ─────────────────────────────────────────────
+print("=== 10. par() edge cases ===")
+line()
+
+# Empty list
 var par_empty = par(list(), double_fn)
-check("par empty len", len(par_empty), 0)
+assert_eq("par empty len", len(par_empty), 0)
 
-# ── Local variables inside parallel body ─────────────────────────────────────
+# Single element
+var par_one = par({42}, double_fn)
+assert_eq("par single len", len(par_one), 1)
+assert_eq("par single val", par_one(0),   84)
 
-var computed = (i=0:4)^{
-    var local_val = i * i + 1,
-    :: local_val
+# Identity function
+var identity = (x){ :: x }
+var par_id = par({7, 8, 9}, identity)
+assert_eq("par identity [0]", par_id(0), 7)
+assert_eq("par identity [1]", par_id(1), 8)
+assert_eq("par identity [2]", par_id(2), 9)
+
+# par result order matches input order
+var ordered = par({5, 3, 1, 4, 2}, sq_fn)
+assert_eq("par order [0]", ordered(0), 25)
+assert_eq("par order [1]", ordered(1),  9)
+assert_eq("par order [2]", ordered(2),  1)
+assert_eq("par order [3]", ordered(3), 16)
+assert_eq("par order [4]", ordered(4),  4)
+
+
+# ── Section 11: Equivalence — parallel matches sequential ────────────────────
+print("=== 11. Equivalence with sequential ===")
+line()
+
+var data2 = {2, 7, 1, 8, 2, 8, 1, 8, 2, 8}
+
+# Sequential map
+var seq_sq = list()
+(i=0:len(data2)){ push(seq_sq, data2(i) * data2(i)) }()
+
+# Parallel map
+var par_sq = (i=0:len(data2))^{ :: data2(i) * data2(i) }()
+
+(i=0:len(data2)){
+    assert_eq("seq==par sq [" + str(i) + "]", par_sq(i), seq_sq(i))
 }()
-check("local var 0", computed(0), 1)
-check("local var 1", computed(1), 2)
-check("local var 2", computed(2), 5)
-check("local var 3", computed(3), 10)
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# par() matches sequential map
+var par_sq2 = par(data2, (x){ :: x * x })
+(i=0:len(data2)){
+    assert_eq("par()==seq sq [" + str(i) + "]", par_sq2(i), seq_sq(i))
+}()
 
-print("parallel tests:", pass, "passed,", fail, "failed")
-fail == 0 : print("ALL PARALLEL TESTS PASSED")
+
+# ── Final report ──────────────────────────────────────────────────────────────
+line()
+print("FINAL: " + str(PASSED) + "/" + str(TOTAL) + " passed")
+PASSED == TOTAL: print("ALL PARALLEL TESTS PASSED")
+PASSED != TOTAL: print(str(TOTAL - PASSED) + " FAILED")

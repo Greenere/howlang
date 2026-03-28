@@ -17,6 +17,7 @@ typedef enum {
     VT_LIST, VT_MAP,
     VT_FUNC, VT_CLASS, VT_INSTANCE, VT_MODULE,
     VT_BUILTIN,
+    VT_DUAL,    /* dual number {val, tan} — forward-mode AD */
 } VT;
 
 typedef struct HowList    HowList;
@@ -54,6 +55,8 @@ struct HowFunc {
     /* for-range callable fields */
     int      is_forrange;
     int      is_parallel;   /* 1 = parallel (^{}) variant */
+    int      is_grad;       /* 1 = grad wrapper; closure has "__primal__" */
+    HowFunc *grad_fn;       /* custom backward pass function, if defined */
     char    *iter_var;
     Node    *fr_start;
     Node    *fr_stop;
@@ -105,6 +108,7 @@ struct Value {
         HowInstance *inst;
         HowModule   *mod;
         struct { BuiltinFn fn; void *ctx; char *name; } builtin;
+        struct { double val; double tan; } dual;  /* VT_DUAL */
     };
 };
 
@@ -240,5 +244,12 @@ char   *find_how_file(const char *name);
 
 Value  *make_builtin(const char *name, BuiltinFn fn);
 void    setup_globals(Env *env);
+
+/* ── Automatic differentiation (defined in gc.c / runtime.c) ───────────── */
+
+Value  *val_dual(double v, double t);
+Value  *compute_grad_closure(Value *primal_fn, Signal *sig);
+
+extern int g_tape_active;
 
 #endif

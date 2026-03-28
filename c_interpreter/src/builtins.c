@@ -89,21 +89,38 @@ BUILTIN(type_fn) {
         case VT_INSTANCE: return val_str("instance");
         case VT_MODULE:   return val_str("module");
         case VT_BUILTIN:  return val_str("builtin");
+        case VT_DUAL:     return val_str("number");
         default:          return val_str("unknown");
     }
 }
 
 BUILTIN(floor_fn) {
-    NEED(1); return val_num(floor(ARG(0)->nval));
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) return val_dual(floor(ARG(0)->dual.val), 0.0);
+    return val_num(floor(ARG(0)->nval));
 }
 BUILTIN(ceil_fn) {
-    NEED(1); return val_num(ceil(ARG(0)->nval));
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) return val_dual(ceil(ARG(0)->dual.val), 0.0);
+    return val_num(ceil(ARG(0)->nval));
 }
 BUILTIN(abs_fn) {
-    NEED(1); return val_num(fabs(ARG(0)->nval));
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) {
+        double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
+        return val_dual(fabs(v), v>=0.0 ? t : -t);
+    }
+    return val_num(fabs(ARG(0)->nval));
 }
 BUILTIN(sqrt_fn) {
-    NEED(1); return val_num(sqrt(ARG(0)->nval));
+    NEED(1);
+    if (ARG(0)->type==VT_DUAL) {
+        double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
+        if (v<0) die("sqrt of negative dual number");
+        double sv=sqrt(v);
+        return val_dual(sv, sv>0.0 ? t/(2.0*sv) : 0.0);
+    }
+    return val_num(sqrt(ARG(0)->nval));
 }
 
 BUILTIN(list_fn) {
@@ -406,6 +423,33 @@ BUILTIN(gc_fn) {
     return val_none();
 }
 
+BUILTIN(grad_builtin_fn) {
+    NEED(1);
+    Value *f = ARG(0);
+    if (f->type != VT_FUNC && f->type != VT_BUILTIN)
+        die("grad() requires a function");
+
+    Env *grad_env = env_new(NULL);
+    GC_ROOT_ENV(grad_env);
+    env_set(grad_env, "__primal__", f);
+
+    HowFunc *gfn = xmalloc(sizeof(*gfn));
+    memset(gfn, 0, sizeof(*gfn));
+    gfn->closure  = grad_env; grad_env->refcount++;
+    gfn->is_grad  = 1;
+    gfn->refcount = 1;
+
+    Value *v = val_new(VT_FUNC);
+    v->func = gfn;
+    pthread_mutex_lock(&g_alloc_mutex);
+    gfn->gc_next = g_all_funcs; g_all_funcs = gfn; g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
+
+    GC_UNROOT_ENV();
+    env_decref(grad_env);
+    return v;
+}
+
 /* time()     — current wall-clock time as milliseconds since Unix epoch
  * time(fn)   — call fn() with no args, return elapsed wall-clock ms      */
 BUILTIN(time_fn) {
@@ -610,6 +654,7 @@ void setup_globals(Env *env) {
     REG("min",     min_fn);
     REG("quit",    quit_fn);
     REG("gc",      gc_fn);
+    REG("grad",    grad_builtin_fn);
     REG("time",    time_fn);
     REG("par",     par_fn);
     REG("_host_call",      host_call_fn);

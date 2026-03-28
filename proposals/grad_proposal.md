@@ -1,4 +1,4 @@
-# Howlang — `grad()` Automatic Differentiation Proposal
+# Howlang — `grad()` Automatic Differentiation Proposal - Implemented ✅
 
 ## Context
 

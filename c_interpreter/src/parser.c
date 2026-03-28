@@ -994,6 +994,15 @@ static Node *parse_atom(Parser *p) {
                     Node *n = make_node(N_FUNC,line);
                     n->func.params = params;
                     parse_func_body(p,&n->func.branches);
+                    n->func.grad_body = NULL;
+                    if (p->pos < p->tl->len
+                        && p->tl->toks[p->pos].type == TT_IDENT
+                        && strcmp(p->tl->toks[p->pos].sval, "grad") == 0
+                        && p->pos+1 < p->tl->len
+                        && p->tl->toks[p->pos+1].type == TT_LPAREN) {
+                        p->pos++;  /* consume 'grad' identifier */
+                        n->func.grad_body = parse_atom(p);
+                    }
                     return n;
                 }
                 /* bare () → None */
@@ -1015,6 +1024,15 @@ static Node *parse_atom(Parser *p) {
                     Node *n = make_node(N_FUNC,line);
                     n->func.params = pl;
                     parse_func_body(p,&n->func.branches);
+                    n->func.grad_body = NULL;
+                    if (p->pos < p->tl->len
+                        && p->tl->toks[p->pos].type == TT_IDENT
+                        && strcmp(p->tl->toks[p->pos].sval, "grad") == 0
+                        && p->pos+1 < p->tl->len
+                        && p->tl->toks[p->pos+1].type == TT_LPAREN) {
+                        p->pos++;  /* consume 'grad' identifier */
+                        n->func.grad_body = parse_atom(p);
+                    }
                     return n;
                 }
                 /* not a function — free param list */

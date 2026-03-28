@@ -1,52 +1,35 @@
-# mlp.how — three-layer MLP with backpropagation in Howlang
+# mlp.how — three-layer MLP using grad() for activation derivatives
 #
 # Architecture:  input(2) → hidden(4) → hidden(4) → output(1)
 # Activations:   ReLU on hidden layers; sigmoid approximation on output
 # Task:          XOR  —  {0,0}→0  {0,1}→1  {1,0}→1  {1,1}→0
 #
-# Howlang has no exp(), so sigmoid is approximated as
-#   0.5 + 0.5 * x / (1 + |x|)
-# Its exact derivative is  0.5 / (1 + |x|)^2  — used in sigmoid_grad.
+# grad() differentiates scalar activation functions automatically.
+# Layer takes a single act_s and stores d_act = grad(act_s) at construction —
+# no manually written derivative functions needed.
 
 
-# ── Activation functions ─────────────────────────────────────────────────────
+# ── Scalar activation functions ───────────────────────────────────────────────
+#
+# relu_s uses a custom grad block because the `:: 0` branch returns a plain
+# number, which breaks forward-mode autodiff at the kink.  The grad block
+# spells out the correct subgradient explicitly.
+#
+# sigmoid_s is smooth and composed entirely of arithmetic + abs, so grad()
+# differentiates it automatically — no grad block needed.
 
-var relu = (v){
-    var out = list()
-    (i=0:len(v)){ push(out, max(0, v(i))) }()
-    :: out
+var relu_s = (x){
+    x > 0 :: x,
+    :: 0
+} grad (x, g){
+    x > 0 :: g,
+    :: 0
 }
 
-var sigmoid = (v){
-    var out = list()
-    (i=0:len(v)){
-        var x = v(i)
-        push(out, 0.5 + 0.5 * x / (1 + abs(x)))
-    }()
-    :: out
-}
-
-# ── Activation derivatives ───────────────────────────────────────────────────
-
-var step = (x){ x > 0 :: 1, :: 0 }     # ReLU derivative: 1 where z > 0
-
-var relu_grad = (z){
-    var out = list()
-    (i=0:len(z)){ push(out, step(z(i))) }()
-    :: out
-}
-
-var sigmoid_grad = (z){                  # d/dx [0.5 + 0.5*x/(1+|x|)] = 0.5/(1+|x|)^2
-    var out = list()
-    (i=0:len(z)){
-        var d = 1 + abs(z(i))
-        push(out, 0.5 / (d * d))
-    }()
-    :: out
-}
+var sigmoid_s = (x){ :: 0.5 + 0.5 * x / (1 + abs(x)) }
 
 
-# ── Vector helpers ────────────────────────────────────────────────────────────
+# ── Vector / matrix helpers ───────────────────────────────────────────────────
 
 var dot = (a, b){
     var s = 0
@@ -59,17 +42,12 @@ var vsub   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)-b(i)) }(), :: o }
 var vmul   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)*b(i)) }(), :: o }
 var vscale = (v, s){ var o=list(), (i=0:len(v)){ push(o, v(i)*s)    }(), :: o }
 
-
-# ── Matrix helpers ────────────────────────────────────────────────────────────
-
-# W * x  (weight matrix times column vector)
 var matvec = (W, x){
     var o = list()
     (i=0:len(W)){ push(o, dot(W(i), x)) }()
     :: o
 }
 
-# W^T * v  —  result[j] = Σ_i  W[i][j] * v[i]  (propagates gradient backward)
 var matvec_T = (W, v){
     var n_cols = len(W(0))
     var o = list()
@@ -81,7 +59,6 @@ var matvec_T = (W, v){
     :: o
 }
 
-# outer product:  a (m,) × b (n,)  →  m×n matrix  (weight gradient)
 var outer = (a, b){
     var mat = list()
     (i=0:len(a)){
@@ -92,7 +69,6 @@ var outer = (a, b){
     :: mat
 }
 
-# element-wise matrix subtract and scale
 var matsub = (A, B){
     var o = list()
     (i=0:len(A)){
@@ -116,29 +92,29 @@ var matscale = (M, s){
 
 # ── Layer ─────────────────────────────────────────────────────────────────────
 #
-# Stores z (pre-activation) and h (post-activation) during the forward pass
-# so the backward pass can reuse them without a second evaluation.
+# Takes a scalar activation function act_s.
+# d_act = grad(act_s) is computed once at construction and reused every step.
 
-var Layer = [W, b, act, act_grad]{
-    W:        W,
-    b:        b,
-    act:      act,
-    act_grad: act_grad,
-    z:        list(),       # cached pre-activation
-    h:        list(),       # cached post-activation
+var Layer = [W, b, act_s]{
+    W:      W,
+    b:      b,
+    act_s:  act_s,
+    d_act:  grad(act_s),
+    z:      list(),
+    h:      list(),
     forward: (x){
         z = vadd(matvec(W, x), b),
-        h = act(z),
+        var out = list(),
+        (i=0:len(z)){ push(out, act_s(z(i))) }(),
+        h = out,
         :: h
     },
     backward: (grad_h, x_in, lr){
-        # dL/dz = dL/dh ⊙ act'(z)   (chain rule through activation)
-        var grad_z = vmul(grad_h, act_grad(z)),
-        # gradient for the layer below: W^T · dL/dz
+        var dz = list(),
+        (i=0:len(z)){ push(dz, d_act(z(i))) }(),
+        var grad_z = vmul(grad_h, dz),
         var grad_x = matvec_T(W, grad_z),
-        # weight update:  W -= lr * (dL/dz ⊗ x_in)
         W = matsub(W, matscale(outer(grad_z, x_in), lr)),
-        # bias update:    b -= lr * dL/dz
         b = vsub(b, vscale(grad_z, lr)),
         :: grad_x
     }
@@ -157,15 +133,12 @@ var MLP = [l1, l2, l3]{
         :: l3.forward(h2)
     },
     train_step: (x, target, lr){
-        # forward — layers cache z and h automatically
         var h1  = l1.forward(x)
         var h2  = l2.forward(h1)
         var out = l3.forward(h2)
         var y   = out(0)
-        # MSE loss and its gradient w.r.t. the scalar output
-        var loss    = (y - target) * (y - target)
-        var grad_y  = {2 * (y - target)}    # wrapped as a 1-element vector
-        # backprop — gradient flows from output layer toward input
+        var loss   = (y - target) * (y - target)
+        var grad_y = {2 * (y - target)}
         var grad_h2 = l3.backward(grad_y,  h2, lr)
         var grad_h1 = l2.backward(grad_h2, h1, lr)
         l1.backward(grad_h1, x, lr),
@@ -175,34 +148,30 @@ var MLP = [l1, l2, l3]{
 
 
 # ── Weights ───────────────────────────────────────────────────────────────────
-#
-# Layer 1: OR detector (row 0), AND detector (row 1), x1-dir (row 2), x2-dir (row 3)
 
 var W1 = {
     { 1,  1},
     { 1,  1},
-    { 1, -1},
+    {-1,  1},
     {-1,  1}
 }
 var b1 = {-0.5, -1.5, 0, 0}
 
-# Layer 2: combine OR/AND/direction features into XOR signal
 var W2 = {
-    {1, -200,  1,  1},
-    {0,  1,  18,  0},
-    {1,  0,  0,  0},
-    {0,  0,  11,  1}
+    {1, -2000000,  1,   1},
+    {0,  1,       18,   0},
+    {1,  11,       0, -100},
+    {0,  0,       11,   1}
 }
-var b2 = {0, 0, 0, 0}
+var b2 = {0, 1, 0, 0}
 
-# Output layer
-var W3 = {{ 2, -4, -2, 1}}
+var W3 = {{2, -4, -2, 1}}
 var b3 = {-0.5}
 
 var net = MLP[
-    Layer[W1, b1, relu,    relu_grad],
-    Layer[W2, b2, relu,    relu_grad],
-    Layer[W3, b3, sigmoid, sigmoid_grad]
+    Layer[W1, b1, relu_s],
+    Layer[W2, b2, relu_s],
+    Layer[W3, b3, sigmoid_s]
 ]
 
 
@@ -224,29 +193,24 @@ var show_predictions = (){
 }
 
 
-# ── Before training ───────────────────────────────────────────────────────────
+# ── Training ──────────────────────────────────────────────────────────────────
 
 print("Before training:")
 show_predictions()
 
-
-# ── Training loop ─────────────────────────────────────────────────────────────
-
 var lr     = 0.05
-var epochs = 1000
+var epochs = 2000
 
 print("")
 print("Training  (epochs=" + str(epochs) + "  lr=" + str(lr) + ")")
 print("")
 
+var start_time = time()
 (epoch=0:epochs){
     var total_loss = 0
     (i=0:4){ total_loss += net.train_step(inputs(i), targets(i), lr) }()
-    epoch % 100 == 0: print("  epoch " + str(epoch) + "   loss: " + str(total_loss))
+    epoch % 100 == 0: print("At " + str(time() - start_time) + "ms epoch " + str(epoch) + "   loss: " + str(total_loss))
 }()
-
-
-# ── After training ────────────────────────────────────────────────────────────
 
 print("")
 print("After training:")

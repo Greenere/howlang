@@ -379,6 +379,7 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `args()`                | List of command-line arguments                           |
 | `par(lst, fn)`          | Apply `fn` to each element of `lst` in parallel; returns result list |
 | `gc()`                  | Trigger a garbage collection cycle                       |
+| `grad(f)`               | Return the gradient function of `f` (see Automatic Differentiation)     |
 | `time()`                | Current wall-clock time as milliseconds since Unix epoch                |
 | `time(fn)`              | Call `fn()` and return elapsed wall-clock milliseconds                  |
 | `cwd()`                 | Return the current working directory as a string         |
@@ -409,6 +410,53 @@ Howlang  |  Ctrl-D or quit() to exit
 - **Ctrl-K** — delete to end of line; **Ctrl-U** — clear the line
 - **Graceful errors** — parse and runtime errors print a message and the REPL continues; state is preserved
 - **Source context** — errors show the offending line and a `^` caret pointing at the problem
+
+---
+
+## Automatic Differentiation
+
+`grad(f)` returns a new function that computes the gradient of `f`. It has the
+same calling convention as `f` but returns gradient information instead of the
+primal value.
+
+| `f` signature | `grad(f)` returns | example |
+|---|---|---|
+| `number → number` | `number` | `grad(f)(3.0)` = scalar derivative |
+| `(a,b,...) → number` | `list` | `{∂f/∂a, ∂f/∂b, ...}` |
+| `() → number` | `map` | `{"a": ∂f/∂a, ...}` for all closed-over vars |
+| `anything → non-number` | `none` | not differentiable |
+
+```
+# Scalar derivative — forward-mode dual numbers
+var f = (x){ :: x * x + 3 * x }
+grad(f)(3.0)          # 9.0  (= 2*3 + 3)
+grad(grad(f))(3.0)    # 2.0  (second derivative)
+
+# Multivariate — list of partial derivatives
+var g = (x, y){ :: x * x + x * y }
+grad(g)(2.0, 3.0)     # {7.0, 2.0}  ({∂/∂x, ∂/∂y})
+
+# Zero-arg closure — reverse-mode tape, returns gradient map
+var a = 3.0
+var b = 2.0
+var loss = (){ :: a * a + b }
+grad(loss)()          # {"a": 6.0, "b": 1.0}
+```
+
+### Custom `grad` block
+
+Functions can declare their own backward pass with `grad (params, g){ ... }`.
+`g` is the upstream gradient; the block returns the downstream gradient.
+
+```
+# Explicit sign function gradient
+var abs_val = (x){ x >= 0 :: x, :: -x } grad (x, g){ x >= 0 :: g, :: -g }
+grad(abs_val)(3.0)    # 1.0
+grad(abs_val)(-2.0)   # -1.0
+```
+
+Without a `grad` block the runtime uses tape-based reverse-mode AD for
+zero-arg closures, and forward-mode dual numbers for all other cases.
 
 ---
 
@@ -570,6 +618,7 @@ HOW=./c_interpreter/build/howlang
 $HOW samples/tests/test_all.how          # 54/54 passed
 $HOW samples/tests/test_loops.how        # 41/41 passed
 $HOW samples/tests/test_parallel.how     # 31/31 passed
+$HOW samples/tests/test_grad.how         # 19/19 passed
 
 cd samples
 ../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34 passed

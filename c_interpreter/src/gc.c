@@ -79,6 +79,12 @@ Value *val_bool(int b)         { Value *v = b ? V_TRUE_SINGLETON : V_FALSE_SINGL
 Value *val_num(double d)       { Value *v = val_new(VT_NUM); v->nval = d; return v; }
 Value *val_str(const char *s)  { Value *v = val_new(VT_STR); v->sval = xstrdup(s); return v; }
 Value *val_str_own(char *s)    { Value *v = val_new(VT_STR); v->sval = s; return v; }
+Value *val_dual(double v, double t) {
+    Value *d = val_new(VT_DUAL);
+    d->dual.val = v;
+    d->dual.tan = t;
+    return d;
+}
 
 HowMap *map_new(void) {
     HowMap *m = xmalloc(sizeof(*m));
@@ -298,6 +304,11 @@ char *val_repr(Value *v) {
             }
             buf_append(&b, "}"); return buf_done(&b);
         }
+        case VT_DUAL: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "<dual %g + %gε>", v->dual.val, v->dual.tan);
+            return xstrdup(buf);
+        }
         case VT_FUNC:     return xstrdup("<function>");
         case VT_CLASS:    return xstrdup("<class>");
         case VT_INSTANCE: {
@@ -326,6 +337,7 @@ int how_truthy(Value *v) {
     if (v->type == VT_BOOL) return v->bval;
     if (v->type == VT_NUM)  return v->nval != 0.0;
     if (v->type == VT_STR)  return v->sval[0] != '\0';
+    if (v->type == VT_DUAL) return v->dual.val != 0.0;
     return 1;
 }
 
@@ -337,6 +349,9 @@ int how_eq(Value *a, Value *b) {
     if (a->type == VT_BOOL && b->type == VT_BOOL) return a->bval == b->bval;
     if (a->type == VT_BOOL || b->type == VT_BOOL) return 0;
     if (a->type == VT_NUM  && b->type == VT_NUM)  return a->nval == b->nval;
+    if (a->type==VT_DUAL && b->type==VT_DUAL) return a->dual.val == b->dual.val;
+    if (a->type==VT_DUAL && b->type==VT_NUM)  return a->dual.val == b->nval;
+    if (a->type==VT_NUM  && b->type==VT_DUAL) return a->nval == b->dual.val;
     if (a->type == VT_STR  && b->type == VT_STR)  return !strcmp(a->sval, b->sval);
     if (a->type == VT_LIST && b->type == VT_LIST) {
         if (a->list->len != b->list->len) return 0;
@@ -393,6 +408,7 @@ static void gc_mark_func(HowFunc *f) {
     if (!f || f->gc_mark) return;
     f->gc_mark = 1;
     gc_mark_env(f->closure);
+    if (f->grad_fn) gc_mark_func(f->grad_fn);
 }
 static void gc_mark_class(HowClass *c) {
     if (!c || c->gc_mark) return;
