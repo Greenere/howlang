@@ -68,6 +68,24 @@ void how_repl_set_errorf(const char *fmt, ...)
     va_end(ap);
 }
 
+static void repl_format_loc_message(char *dst, size_t dst_sz,
+                                    const char *kind,
+                                    int line, int col,
+                                    const char *msg)
+{
+    int off = snprintf(dst, dst_sz, "%s: %s", kind, msg);
+    if (off < 0 || (size_t)off >= dst_sz)
+        return;
+
+    if (g_current_source_name && line > 0)
+    {
+        off += snprintf(dst + off, dst_sz - (size_t)off,
+                        "\n  --> %s:%d", g_current_source_name, line);
+        if (col > 0 && (size_t)off < dst_sz)
+            snprintf(dst + off, dst_sz - (size_t)off, ":%d", col);
+    }
+}
+
 /* ── Fatal error helpers ─────────────────────────────────────────────────── */
 
 /* In REPL mode, errors longjmp back to the prompt instead of calling exit(). */
@@ -80,7 +98,8 @@ void die(const char *fmt, ...)
     va_end(ap);
     if (g_repl_active)
     {
-        how_repl_set_errorf("%s", msg);
+        repl_format_loc_message(g_repl_errmsg, sizeof(g_repl_errmsg),
+                                "RuntimeError", 0, 0, msg);
         how_repl_longjmp();
     }
     fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);
@@ -97,7 +116,8 @@ void die_at(int line, int col, const char *fmt, ...)
     va_end(ap);
     if (g_repl_active)
     {
-        how_repl_set_errorf("%s", msg);
+        repl_format_loc_message(g_repl_errmsg, sizeof(g_repl_errmsg),
+                                "RuntimeError", line, col, msg);
         how_repl_longjmp();
     }
     fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);

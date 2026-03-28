@@ -94,6 +94,25 @@ static Token *p_adv(Parser *p) {
     if (t->type != TT_EOF) p->pos++;
     return t;
 }
+
+static void repl_parse_error(Token *cur, const char *errmsg, const char *hint) {
+    char full[1536];
+    int off = snprintf(full, sizeof(full), "ParseError: %s", errmsg);
+
+    if (how_current_source_name() && cur->line > 0 && off >= 0 && (size_t)off < sizeof(full)) {
+        off += snprintf(full + off, sizeof(full) - (size_t)off,
+                        "\n  --> %s:%d:%d",
+                        how_current_source_name(), cur->line, cur->col);
+    }
+
+    if (hint && off >= 0 && (size_t)off < sizeof(full)) {
+        snprintf(full + off, sizeof(full) - (size_t)off, "\n%s", hint);
+    }
+
+    how_repl_set_errorf("%s", full);
+    how_repl_longjmp();
+}
+
 static int p_check(Parser *p, TT t) { return p_peek(p,0)->type == t; }
 static Token *p_expect(Parser *p, TT t, const char *msg) {
     if (!p_check(p,t)) {
@@ -1055,8 +1074,9 @@ static Node *parse_atom(Parser *p) {
         Token *cur = p_peek(p,0);
         const char *hint = parse_hint_for_token(-1, (int)cur->type);
         if (how_repl_is_active()) {
-            how_repl_set_errorf("ParseError: unexpected token %s", token_type_name((int)cur->type));
-            how_repl_longjmp();
+            char errmsg[512];
+            snprintf(errmsg, sizeof(errmsg), "unexpected token %s", token_type_name((int)cur->type));
+            repl_parse_error(cur, errmsg, hint);
         }
         fprintf(stderr, "\033[31m[ParseError]\033[0m unexpected token %s\n",
                 token_type_name((int)cur->type));

@@ -248,7 +248,8 @@ void repl(Env *env) {
                 "_ != none: print(_)\n",
                 line);
         } else {
-            strncpy(runbuf, line, sizeof(runbuf)-1);
+            strncpy(runbuf, line, sizeof(runbuf) - 1);
+            runbuf[sizeof(runbuf) - 1] = 0;
         }
 
         /* Run with graceful error recovery */
