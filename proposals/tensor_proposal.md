@@ -1,4 +1,4 @@
-# Howlang — Tensor Proposal
+# Howlang — Tensor Proposal - Implemented ✅
 
 ## Context and motivation
 

@@ -7,6 +7,10 @@
 # grad() differentiates scalar activation functions automatically.
 # Layer takes a single act_s and stores d_act = grad(act_s) at construction —
 # no manually written derivative functions needed.
+#
+# grad(act_s)(tensor) now applies the scalar derivative element-wise and
+# returns a keyed map {"x": grad_tensor}, so the backward pass is a single
+# expression instead of a scalar loop.
 
 
 # ── Scalar activation functions ───────────────────────────────────────────────
@@ -49,9 +53,7 @@ var Layer = [W, b, act_s]{
         :: h
     },
     backward: (grad_h, x_in, lr){
-        var dz = list(),
-        (i=0:len(z)){ push(dz, d_act(z(i))) }(),
-        var grad_z = grad_h * tensor(dz),
+        var grad_z = grad_h * d_act(z)("x"),
         var grad_x = T(W) @ grad_z,
         W -= lr * outer(grad_z, x_in),
         b -= lr * grad_z,

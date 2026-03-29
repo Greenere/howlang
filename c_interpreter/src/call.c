@@ -6,6 +6,20 @@
  */
 #include "runtime_internal.h"
 
+/* ── Helper: traverse is_grad chain to find leaf function's param name ────── */
+
+static const char *grad_param_name(Value *primal, int i) {
+    Value *fn = primal;
+    while (fn && fn->type == VT_FUNC && fn->func->is_grad) {
+        Value *inner = env_get(fn->func->closure, "__primal__");
+        if (!inner) break;
+        fn = inner;
+    }
+    if (fn && fn->type == VT_FUNC && i < fn->func->params.len)
+        return fn->func->params.s[i];
+    return NULL;
+}
+
 /* ── Unbounded (:)= loop ─────────────────────────────────────────────────── */
 
 void run_loop(HowFunc *fn, Signal *sig) {
@@ -210,14 +224,41 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
             Value *primal_v = env_get(fn->closure, "__primal__");
             if (!primal_v) die_at(line, 0, "grad wrapper lost its primal");
 
-            /* Custom grad block: run tape + merge with grad block overrides */
-            if (primal_v->type==VT_FUNC && primal_v->func->grad_fn) {
-                return call_custom_grad(primal_v->func, args, argc, sig, line);
-            }
-
             /* Zero-arg closure: reverse-mode */
             if (argc == 0) {
                 return compute_grad_closure(primal_v, sig);
+            }
+
+            /* Single tensor arg: apply scalar grad element-wise (before grad_fn check)
+             * so that grad(f)(tensor) always broadcasts correctly regardless of grad_fn */
+            if (argc == 1 && args[0]->type == VT_TENSOR) {
+                HowTensor *t = args[0]->tensor;
+                HowTensor *out = tensor_new(t->ndim, t->shape);
+                Value *tv = val_tensor(out);
+                GC_ROOT_VALUE(tv);
+                for (int i = 0; i < t->nelem; i++) {
+                    Value *da = val_dual(t->data[i], 1.0);
+                    GC_ROOT_VALUE(da);
+                    Signal inner3 = {SIG_NONE, NULL};
+                    Value *res = eval_call_val(primal_v, &da, 1, &inner3, line);
+                    GC_UNROOT_VALUE(); val_decref(da);
+                    out->data[i] = (res && res->type == VT_DUAL) ? res->dual.tan : 0.0;
+                    if (res) val_decref(res);
+                }
+                const char *_tp = grad_param_name(primal_v, 0);
+                const char *tpname = _tp ? _tp : "0";
+                HowMap *tgmap = map_new();
+                Value *tgmv = val_map(tgmap); map_decref(tgmap);
+                GC_ROOT_VALUE(tgmv);
+                map_set(tgmv->map, tpname, tv);
+                GC_UNROOT_VALUE(); val_decref(tv);
+                GC_UNROOT_VALUE();
+                return tgmv;
+            }
+
+            /* Custom grad block: run tape + merge with grad block overrides */
+            if (primal_v->type==VT_FUNC && primal_v->func->grad_fn) {
+                return call_custom_grad(primal_v->func, args, argc, sig, line);
             }
 
             /* Single numeric arg: forward-mode */
@@ -238,7 +279,7 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                     val_decref(res); return val_none();
                 }
                 val_decref(res);
-                /* If input was dual (nested grad), compute d²f/dx² via second pass */
+                /* If input was dual (nested grad), return dual so outer grad can extract tangent */
                 if (args[0]->type == VT_DUAL) {
                     const double h = 1e-5;
                     Value *da2 = val_dual(xv + h, 1.0);
@@ -252,15 +293,28 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                     double dgr_dx = (gr2 - gr) / h;
                     return val_dual(gr, dgr_dx * xt);
                 }
-                return val_num(gr);
+                /* User-facing call: always return keyed map {param_name: gradient} */
+                {
+                    const char *_p = grad_param_name(primal_v, 0);
+                    const char *pname = _p ? _p : "0";
+                    HowMap *gmap = map_new();
+                    Value *gmv = val_map(gmap); map_decref(gmap);
+                    GC_ROOT_VALUE(gmv);
+                    Value *gn = val_num(gr);
+                    map_set(gmv->map, pname, gn); val_decref(gn);
+                    GC_UNROOT_VALUE();
+                    return gmv;
+                }
             }
 
-            /* Multi-arg: list of partial derivatives */
+            /* Multi-arg: keyed map of partial derivatives {param_name: gradient} */
             if (argc > 1) {
                 int all_num = 1;
                 for (int i=0; i<argc; i++) if (args[i]->type!=VT_NUM) { all_num=0; break; }
                 if (all_num) {
-                    HowList *gl = list_new();
+                    HowMap *gmap = map_new();
+                    Value *gmv = val_map(gmap); map_decref(gmap);
+                    GC_ROOT_VALUE(gmv);
                     for (int i=0; i<argc; i++) {
                         Value **da = xmalloc((size_t)argc * sizeof(Value*));
                         for (int j=0; j<argc; j++)
@@ -272,15 +326,22 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                         free(da);
                         if (inner2.type != SIG_NONE) {
                             if (inner2.retval) val_decref(inner2.retval);
-                            list_decref(gl);
+                            GC_UNROOT_VALUE(); val_decref(gmv);
                             return res;
                         }
                         double gv = (res->type==VT_DUAL) ? res->dual.tan : 0.0;
                         val_decref(res);
+                        const char *pname = grad_param_name(primal_v, i);
+                        char fallback[16];
+                        if (!pname) {
+                            snprintf(fallback, sizeof(fallback), "%d", i);
+                            pname = fallback;
+                        }
                         Value *gn = val_num(gv);
-                        list_push(gl, gn); val_decref(gn);
+                        map_set(gmv->map, pname, gn); val_decref(gn);
                     }
-                    Value *rv = val_list(gl); list_decref(gl); return rv;
+                    GC_UNROOT_VALUE();
+                    return gmv;
                 }
             }
 

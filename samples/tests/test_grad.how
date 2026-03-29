@@ -1,5 +1,7 @@
 # test_grad.how — comprehensive tests for grad() automatic differentiation
 #
+# grad() always returns a keyed map {param_name: gradient_value}.
+#
 # Sections:
 #   1. Scalar forward-mode  (single numeric argument)
 #   2. Higher-order derivatives
@@ -12,6 +14,8 @@
 #   9. Closure reverse-mode (zero-arg, returns gradient map)
 #  10. grad() on class fields (integration)
 #  11. Gradient-based optimisation  (find minimum via gradient descent)
+#  12. grad block partial-map semantics
+#  13. Tensor element-wise grad
 
 var TOTAL  = 0
 var PASSED = 0
@@ -53,21 +57,21 @@ var lin = (x){ :: 3 * x + 5 }
 var inv = (x){ :: 1 / x }
 var poly = (x){ :: x * x * x - 2 * x * x + x - 7 }
 
-assert_close("d(x^2)/dx at x=0",     grad(sq)(0.0),   0.0)
-assert_close("d(x^2)/dx at x=3",     grad(sq)(3.0),   6.0)
-assert_close("d(x^2)/dx at x=-2",    grad(sq)(-2.0), -4.0)
-assert_close("d(x^2)/dx at x=0.5",   grad(sq)(0.5),   1.0)
+assert_close("d(x^2)/dx at x=0",     grad(sq)(0.0)("x"),   0.0)
+assert_close("d(x^2)/dx at x=3",     grad(sq)(3.0)("x"),   6.0)
+assert_close("d(x^2)/dx at x=-2",    grad(sq)(-2.0)("x"), -4.0)
+assert_close("d(x^2)/dx at x=0.5",   grad(sq)(0.5)("x"),   1.0)
 
-assert_close("d(3x+5)/dx at x=0",    grad(lin)(0.0),  3.0)
-assert_close("d(3x+5)/dx is const",  grad(lin)(99.0), 3.0)
+assert_close("d(3x+5)/dx at x=0",    grad(lin)(0.0)("x"),  3.0)
+assert_close("d(3x+5)/dx is const",  grad(lin)(99.0)("x"), 3.0)
 
-assert_close("d(1/x)/dx at x=2",     grad(inv)(2.0),  -0.25)
-assert_close("d(1/x)/dx at x=4",     grad(inv)(4.0),  -0.0625)
+assert_close("d(1/x)/dx at x=2",     grad(inv)(2.0)("x"),  -0.25)
+assert_close("d(1/x)/dx at x=4",     grad(inv)(4.0)("x"),  -0.0625)
 
 # d/dx [x^3 - 2x^2 + x - 7] = 3x^2 - 4x + 1
-assert_close("d(poly)/dx at x=0",    grad(poly)(0.0),  1.0)
-assert_close("d(poly)/dx at x=1",    grad(poly)(1.0),  0.0)
-assert_close("d(poly)/dx at x=3",    grad(poly)(3.0),  16.0)
+assert_close("d(poly)/dx at x=0",    grad(poly)(0.0)("x"),  1.0)
+assert_close("d(poly)/dx at x=1",    grad(poly)(1.0)("x"),  0.0)
+assert_close("d(poly)/dx at x=3",    grad(poly)(3.0)("x"),  16.0)
 
 
 # ── Section 2: Higher-order derivatives ──────────────────────────────────────
@@ -75,21 +79,21 @@ print("=== 2. Higher-order derivatives ===")
 line()
 
 # d^2/dx^2 [x^2] = 2
-assert_close("d^2(x^2)/dx^2 at x=0",   grad(grad(sq))(0.0),   2.0)
-assert_close("d^2(x^2)/dx^2 at x=5",   grad(grad(sq))(5.0),   2.0)
-assert_close("d^2(x^2)/dx^2 at x=-3",  grad(grad(sq))(-3.0),  2.0)
+assert_close("d^2(x^2)/dx^2 at x=0",   grad(grad(sq))(0.0)("x"),   2.0)
+assert_close("d^2(x^2)/dx^2 at x=5",   grad(grad(sq))(5.0)("x"),   2.0)
+assert_close("d^2(x^2)/dx^2 at x=-3",  grad(grad(sq))(-3.0)("x"),  2.0)
 
 # d^3/dx^3 [x^2] = 0
-assert_close("d^3(x^2)/dx^3",          grad(grad(grad(sq)))(1.0), 0.0)
+assert_close("d^3(x^2)/dx^3",          grad(grad(grad(sq)))(1.0)("x"), 0.0)
 
 # d/dx [x^3] = 3x^2 ;  d^2/dx^2 = 6x
 var cube = (x){ :: x * x * x }
-assert_close("d(x^3)/dx at x=2",       grad(cube)(2.0),       12.0)
-assert_close("d^2(x^3)/dx^2 at x=2",   grad(grad(cube))(2.0), 12.0)
-assert_close("d^3(x^3)/dx^3",          grad(grad(grad(cube)))(1.0), 6.0)
+assert_close("d(x^3)/dx at x=2",       grad(cube)(2.0)("x"),       12.0)
+assert_close("d^2(x^3)/dx^2 at x=2",   grad(grad(cube))(2.0)("x"), 12.0)
+assert_close("d^3(x^3)/dx^3",          grad(grad(grad(cube)))(1.0)("x"), 6.0)
 
 # d^4/dx^4 [x^3] = 0
-assert_close("d^4(x^3)/dx^4",          grad(grad(grad(grad(cube))))(1.0), 0.0)
+assert_close("d^4(x^3)/dx^4",          grad(grad(grad(grad(cube))))(1.0)("x"), 0.0)
 
 
 # ── Section 3: Arithmetic rules ───────────────────────────────────────────────
@@ -98,30 +102,30 @@ line()
 
 # Addition: d/dx [x + c] = 1
 var f_add = (x){ :: x + 10 }
-assert_close("d(x+10)/dx",    grad(f_add)(5.0),  1.0)
+assert_close("d(x+10)/dx",    grad(f_add)(5.0)("x"),  1.0)
 
 # Subtraction: d/dx [x - c] = 1 ; d/dx [c - x] = -1
 var f_sub1 = (x){ :: x - 3 }
 var f_sub2 = (x){ :: 7 - x }
-assert_close("d(x-3)/dx",     grad(f_sub1)(5.0),  1.0)
-assert_close("d(7-x)/dx",     grad(f_sub2)(5.0), -1.0)
+assert_close("d(x-3)/dx",     grad(f_sub1)(5.0)("x"),  1.0)
+assert_close("d(7-x)/dx",     grad(f_sub2)(5.0)("x"), -1.0)
 
 # Multiplication product rule: d/dx [x*x] = 2x
-assert_close("product rule x*x at 4",  grad(sq)(4.0), 8.0)
+assert_close("product rule x*x at 4",  grad(sq)(4.0)("x"), 8.0)
 
 # Division quotient rule: d/dx [1/x] = -1/x^2
-assert_close("quotient rule at x=2",   grad(inv)(2.0), -0.25)
-assert_close("quotient rule at x=5",   grad(inv)(5.0), -0.04)
+assert_close("quotient rule at x=2",   grad(inv)(2.0)("x"), -0.25)
+assert_close("quotient rule at x=5",   grad(inv)(5.0)("x"), -0.04)
 
 # Unary negation: d/dx [-x^2] = -2x
 var f_neg = (x){ :: -(x * x) }
-assert_close("d(-x^2)/dx at x=3",  grad(f_neg)(3.0), -6.0)
-assert_close("d(-x^2)/dx at x=-1", grad(f_neg)(-1.0), 2.0)
+assert_close("d(-x^2)/dx at x=3",  grad(f_neg)(3.0)("x"), -6.0)
+assert_close("d(-x^2)/dx at x=-1", grad(f_neg)(-1.0)("x"), 2.0)
 
 # Chain rule: d/dx [(x^2)^2] = 4x^3  — encoded as x*x*x*x
 var f_chain = (x){ :: x * x * x * x }
-assert_close("d(x^4)/dx at x=2",   grad(f_chain)(2.0), 32.0)
-assert_close("d(x^4)/dx at x=-1",  grad(f_chain)(-1.0), -4.0)
+assert_close("d(x^4)/dx at x=2",   grad(f_chain)(2.0)("x"), 32.0)
+assert_close("d(x^4)/dx at x=-1",  grad(f_chain)(-1.0)("x"), -4.0)
 
 
 # ── Section 4: Built-in functions ─────────────────────────────────────────────
@@ -130,30 +134,30 @@ line()
 
 # sqrt: d/dx [sqrt(x)] = 1/(2*sqrt(x))
 var f_sqrt = (x){ :: sqrt(x) }
-assert_close("d(sqrt)/dx at x=1",   grad(f_sqrt)(1.0),  0.5)
-assert_close("d(sqrt)/dx at x=4",   grad(f_sqrt)(4.0),  0.25)
-assert_close("d(sqrt)/dx at x=9",   grad(f_sqrt)(9.0),  0.16667)
-assert_close("d(sqrt)/dx at x=0.25",grad(f_sqrt)(0.25), 1.0)
+assert_close("d(sqrt)/dx at x=1",   grad(f_sqrt)(1.0)("x"),  0.5)
+assert_close("d(sqrt)/dx at x=4",   grad(f_sqrt)(4.0)("x"),  0.25)
+assert_close("d(sqrt)/dx at x=9",   grad(f_sqrt)(9.0)("x"),  0.16667)
+assert_close("d(sqrt)/dx at x=0.25",grad(f_sqrt)(0.25)("x"), 1.0)
 
 # sqrt chain rule: d/dx [sqrt(x^2)] = x/|x| = sign(x)  — only tested at x>0
 var f_sqrt_chain = (x){ :: sqrt(x * x) }
-assert_close("d(sqrt(x^2))/dx at x=3",  grad(f_sqrt_chain)(3.0),  1.0)
+assert_close("d(sqrt(x^2))/dx at x=3",  grad(f_sqrt_chain)(3.0)("x"),  1.0)
 
 # abs: d/dx [|x|] = sign(x)
 var f_abs = (x){ :: abs(x) }
-assert_close("d(abs)/dx at x=3",   grad(f_abs)(3.0),   1.0)
-assert_close("d(abs)/dx at x=-4",  grad(f_abs)(-4.0), -1.0)
+assert_close("d(abs)/dx at x=3",   grad(f_abs)(3.0)("x"),   1.0)
+assert_close("d(abs)/dx at x=-4",  grad(f_abs)(-4.0)("x"), -1.0)
 
 # floor/ceil: derivative is 0 almost everywhere
 var f_floor = (x){ :: floor(x) + x }   # derivative = 0 + 1 = 1
 var f_ceil  = (x){ :: ceil(x)  + x }   # derivative = 0 + 1 = 1
-assert_close("d(floor(x)+x)/dx",  grad(f_floor)(2.7), 1.0)
-assert_close("d(ceil(x)+x)/dx",   grad(f_ceil)(2.3),  1.0)
+assert_close("d(floor(x)+x)/dx",  grad(f_floor)(2.7)("x"), 1.0)
+assert_close("d(ceil(x)+x)/dx",   grad(f_ceil)(2.3)("x"),  1.0)
 
 # Combined: d/dx [sqrt(abs(x))] = sign(x) / (2*sqrt(|x|))
 var f_combined = (x){ :: sqrt(abs(x)) }
-assert_close("d(sqrt(abs(x)))/dx at x=4",  grad(f_combined)(4.0),   0.25)
-assert_close("d(sqrt(abs(x)))/dx at x=-4", grad(f_combined)(-4.0), -0.25)
+assert_close("d(sqrt(abs(x)))/dx at x=4",  grad(f_combined)(4.0)("x"),   0.25)
+assert_close("d(sqrt(abs(x)))/dx at x=-4", grad(f_combined)(-4.0)("x"), -0.25)
 
 
 # ── Section 5: Multivariate partial derivatives ───────────────────────────────
@@ -164,27 +168,27 @@ line()
 var fxy = (x, y){ :: x * x + x * y }
 var dfxy = grad(fxy)
 var g23 = dfxy(2.0, 3.0)
-assert_close("∂(x^2+xy)/∂x at (2,3)", g23(0), 7.0)
-assert_close("∂(x^2+xy)/∂y at (2,3)", g23(1), 2.0)
+assert_close("∂(x^2+xy)/∂x at (2,3)", g23("x"), 7.0)
+assert_close("∂(x^2+xy)/∂y at (2,3)", g23("y"), 2.0)
 
 # f(x,y) = x*y   →  ∂f/∂x = y,  ∂f/∂y = x
 var fmul = (x, y){ :: x * y }
 var g_mul = grad(fmul)(3.0, 5.0)
-assert_close("∂(x*y)/∂x at (3,5)", g_mul(0), 5.0)
-assert_close("∂(x*y)/∂y at (3,5)", g_mul(1), 3.0)
+assert_close("∂(x*y)/∂x at (3,5)", g_mul("x"), 5.0)
+assert_close("∂(x*y)/∂y at (3,5)", g_mul("y"), 3.0)
 
 # f(x,y,z) = x^2 + y^2 + z^2  →  gradients are (2x, 2y, 2z)
 var f3 = (x, y, z){ :: x*x + y*y + z*z }
 var g3 = grad(f3)(1.0, 2.0, 3.0)
-assert_close("∂(x^2+y^2+z^2)/∂x", g3(0), 2.0)
-assert_close("∂(x^2+y^2+z^2)/∂y", g3(1), 4.0)
-assert_close("∂(x^2+y^2+z^2)/∂z", g3(2), 6.0)
+assert_close("∂(x^2+y^2+z^2)/∂x", g3("x"), 2.0)
+assert_close("∂(x^2+y^2+z^2)/∂y", g3("y"), 4.0)
+assert_close("∂(x^2+y^2+z^2)/∂z", g3("z"), 6.0)
 
 # Cross terms: f(x,y) = x^2*y  →  ∂f/∂x = 2xy,  ∂f/∂y = x^2
 var f_cross = (x, y){ :: x * x * y }
 var g_cross = grad(f_cross)(3.0, 4.0)
-assert_close("∂(x^2*y)/∂x at (3,4)", g_cross(0), 24.0)
-assert_close("∂(x^2*y)/∂y at (3,4)", g_cross(1),  9.0)
+assert_close("∂(x^2*y)/∂x at (3,4)", g_cross("x"), 24.0)
+assert_close("∂(x^2*y)/∂y at (3,4)", g_cross("y"),  9.0)
 
 
 # ── Section 6: Branching functions ────────────────────────────────────────────
@@ -193,10 +197,10 @@ line()
 
 # relu (forward-mode via :: branch returning dual)
 var relu_auto = (x){ x > 0 :: x, :: 0 } grad (x, g){ x > 0 :: g, :: 0 }
-assert_close("grad relu at x=3",   grad(relu_auto)(3.0),  1.0)
-assert_close("grad relu at x=0.1", grad(relu_auto)(0.1),  1.0)
-assert_close("grad relu at x=-1",  grad(relu_auto)(-1.0), 0.0)
-assert_close("grad relu at x=-10", grad(relu_auto)(-10.0),0.0)
+assert_close("grad relu at x=3",   grad(relu_auto)(3.0)("x"),  1.0)
+assert_close("grad relu at x=0.1", grad(relu_auto)(0.1)("x"),  1.0)
+assert_close("grad relu at x=-1",  grad(relu_auto)(-1.0)("x"), 0.0)
+assert_close("grad relu at x=-10", grad(relu_auto)(-10.0)("x"),0.0)
 
 # leaky relu: slope 0.01 for x<0
 var leaky = (x){
@@ -206,13 +210,13 @@ var leaky = (x){
     x > 0 :: g,
     :: 0.01 * g
 }
-assert_close("grad leaky_relu at x=2",   grad(leaky)(2.0),   1.0)
-assert_close("grad leaky_relu at x=-2",  grad(leaky)(-2.0),  0.01)
+assert_close("grad leaky_relu at x=2",   grad(leaky)(2.0)("x"),   1.0)
+assert_close("grad leaky_relu at x=-2",  grad(leaky)(-2.0)("x"),  0.01)
 
 # max(x, c) — piecewise: slope 1 for x>c, 0 otherwise
 var f_max = (x){ x > 2 :: x, :: 2 }  grad (x, g){ x > 2 :: g, :: 0 }
-assert_close("grad max(x,2) at x=5",  grad(f_max)(5.0), 1.0)
-assert_close("grad max(x,2) at x=1",  grad(f_max)(1.0), 0.0)
+assert_close("grad max(x,2) at x=5",  grad(f_max)(5.0)("x"), 1.0)
+assert_close("grad max(x,2) at x=1",  grad(f_max)(1.0)("x"), 0.0)
 
 # Branching combined with arithmetic
 var f_branch_arith = (x){
@@ -222,8 +226,8 @@ var f_branch_arith = (x){
 # Both branches have derivative 2x or -2x based on sign;
 # at x=3: branch taken is x>=0, so derivative = 2*3 = 6
 # at x=-2: branch taken is x<0, so f = -(x*x), derivative = -2x = 4
-assert_close("grad piecewise x^2 at x=3",  grad(f_branch_arith)(3.0),  6.0)
-assert_close("grad piecewise x^2 at x=-2", grad(f_branch_arith)(-2.0), 4.0)
+assert_close("grad piecewise x^2 at x=3",  grad(f_branch_arith)(3.0)("x"),  6.0)
+assert_close("grad piecewise x^2 at x=-2", grad(f_branch_arith)(-2.0)("x"), 4.0)
 
 
 # ── Section 7: Non-differentiable / non-numeric returns ───────────────────────
@@ -249,14 +253,14 @@ line()
 
 # abs via custom block
 var abs_c = (x){ x >= 0 :: x, :: -x } grad (x, g){ x >= 0 :: g, :: -g }
-assert_close("custom abs grad at x=5",   grad(abs_c)(5.0),   1.0)
-assert_close("custom abs grad at x=-3",  grad(abs_c)(-3.0), -1.0)
+assert_close("custom abs grad at x=5",   grad(abs_c)(5.0)("x"),   1.0)
+assert_close("custom abs grad at x=-3",  grad(abs_c)(-3.0)("x"), -1.0)
 
 # Custom block composes with outer arithmetic
 # d/dx [abs_c(x) * 2] — chain rule through the custom block
 var f_abs2 = (x){ :: abs_c(x) * 2 }
-assert_close("d(abs_c(x)*2)/dx at x=4",  grad(f_abs2)(4.0),   2.0)
-assert_close("d(abs_c(x)*2)/dx at x=-4", grad(f_abs2)(-4.0), -2.0)
+assert_close("d(abs_c(x)*2)/dx at x=4",  grad(f_abs2)(4.0)("x"),   2.0)
+assert_close("d(abs_c(x)*2)/dx at x=-4", grad(f_abs2)(-4.0)("x"), -2.0)
 
 # Custom block: clamp(x, lo, hi)
 var clamp = (x){
@@ -268,17 +272,17 @@ var clamp = (x){
     x > 1 :: 0,
     :: g
 }
-assert_close("grad clamp at x=-1 (flat)", grad(clamp)(-1.0), 0.0)
-assert_close("grad clamp at x=0.5 (lin)", grad(clamp)(0.5),  1.0)
-assert_close("grad clamp at x=2  (flat)", grad(clamp)(2.0),  0.0)
+assert_close("grad clamp at x=-1 (flat)", grad(clamp)(-1.0)("x"), 0.0)
+assert_close("grad clamp at x=0.5 (lin)", grad(clamp)(0.5)("x"),  1.0)
+assert_close("grad clamp at x=2  (flat)", grad(clamp)(2.0)("x"),  0.0)
 
 # Custom block with scale: f(x) = x^2 grad block returns 2x*g
 var sq_custom = (x){ :: x * x } grad (x, g){ :: 2 * x * g }
-assert_close("custom sq grad at x=3",  grad(sq_custom)(3.0),  6.0)
-assert_close("custom sq grad at x=-2", grad(sq_custom)(-2.0), -4.0)
+assert_close("custom sq grad at x=3",  grad(sq_custom)(3.0)("x"),  6.0)
+assert_close("custom sq grad at x=-2", grad(sq_custom)(-2.0)("x"), -4.0)
 
 # Higher-order through custom block: grad(grad(sq_custom)) should be 2
-assert_close("grad^2 custom sq",       grad(grad(sq_custom))(5.0), 2.0)
+assert_close("grad^2 custom sq",       grad(grad(sq_custom))(5.0)("x"), 2.0)
 
 
 # ── Section 9: Closure reverse-mode ──────────────────────────────────────────
@@ -337,17 +341,17 @@ var Neuron = [w0, w1, b, act]{
     forward: (x0, x1){ :: act(w0 * x0 + w1 * x1 + b) },
     d_input: (x0, x1){
         var z = w0 * x0 + w1 * x1 + b,
-        :: d_act(z)
+        :: d_act(z)("x")
     }
 }
 
 var n = Neuron[2.0, 3.0, 1.0, act_fn]
 
-# z = 2*1 + 3*2 + 1 = 9 > 0, so act(9)=9, d_act(9)=1
+# z = 2*1 + 3*2 + 1 = 9 > 0, so act(9)=9, d_act(9)("x")=1
 assert_close("neuron forward",  n.forward(1.0, 2.0),  9.0)
 assert_close("neuron d_act",    n.d_input(1.0, 2.0),  1.0)
 
-# z = 2*0 + 3*0 - 2 = -2 < 0, so act(-2)=0, d_act(-2)=0
+# z = 2*0 + 3*0 - 2 = -2 < 0, so act(-2)=0, d_act(-2)("x")=0
 var n2 = Neuron[2.0, 3.0, -2.0, act_fn]
 assert_close("neuron forward (dead)", n2.forward(0.0, 0.0), 0.0)
 assert_close("neuron d_act   (dead)", n2.d_input(0.0, 0.0), 0.0)
@@ -365,7 +369,7 @@ var f_opt = (x){ :: (x - target) * (x - target) }
 var lr_opt = 0.1
 
 (step=0:100){
-    x_opt = x_opt - lr_opt * grad(f_opt)(x_opt)
+    x_opt = x_opt - lr_opt * grad(f_opt)(x_opt)("x")
 }()
 assert_close("GD: minimise (x-3)^2, converges to 3", x_opt, 3.0)
 
@@ -374,7 +378,7 @@ assert_close("GD: minimise (x-3)^2, converges to 3", x_opt, 3.0)
 var x2 = 1.5
 var f_quartic = (x){ :: x*x*x*x - 4*x*x }
 (step=0:200){
-    x2 = x2 - 0.01 * grad(f_quartic)(x2)
+    x2 = x2 - 0.01 * grad(f_quartic)(x2)("x")
 }()
 assert_close("GD: local min of x^4-4x^2", x2, 1.41421)
 
@@ -395,8 +399,8 @@ line()
 # 12a. Map-style grad block — returns {param: grad} instead of a bare value.
 #      Explicit override wins over tape.
 var sq_map = (x){ :: x * x } grad (x, g){ :: {"x": 2.0 * x * g} }
-assert_close("map-style sq grad at x=3",   grad(sq_map)(3.0),   6.0)
-assert_close("map-style sq grad at x=-2",  grad(sq_map)(-2.0), -4.0)
+assert_close("map-style sq grad at x=3",   grad(sq_map)(3.0)("x"),   6.0)
+assert_close("map-style sq grad at x=-2",  grad(sq_map)(-2.0)("x"), -4.0)
 
 # 12b. Partial override: specify only x, let tape compute y.
 #      f(x,y) = x^2 + y^3  →  ∂f/∂x = 2x,  ∂f/∂y = 3y^2
@@ -417,9 +421,9 @@ var apply_double = (f, x){
     :: {}    # empty override: tape computes full chain rule through f(x)*2
 }
 var dbl = (x){ :: x * x }
-var g3 = grad(apply_double)(dbl, 3.0)
-assert_close("function param: tape computes x through f",  g3("x"), 12.0)  # 2*2*3*1
-assert_eq(   "function param: f has no numeric gradient",  g3("f"), none)
+var g3_12c = grad(apply_double)(dbl, 3.0)
+assert_close("function param: tape computes x through f",  g3_12c("x"), 12.0)  # 2*2*3*1
+assert_eq(   "function param: f has no numeric gradient",  g3_12c("f"), none)
 
 # 12d. Surrogate gradient (straight-through estimator).
 #      step(x) has zero derivative everywhere but we substitute g.
@@ -429,12 +433,12 @@ var step_ste = (x){
 } grad (x, g){
     :: {"x": g}    # STE: pass upstream gradient straight through
 }
-assert_close("STE: grad above threshold", grad(step_ste)(0.8), 1.0)
-assert_close("STE: grad below threshold", grad(step_ste)(0.2), 1.0)
+assert_close("STE: grad above threshold", grad(step_ste)(0.8)("x"), 1.0)
+assert_close("STE: grad below threshold", grad(step_ste)(0.2)("x"), 1.0)
 
 # 12e. Empty map override — identical to having no grad block at all.
 var f_empty_override = (x){ :: x * x } grad (x, g){ :: {} }
-assert_close("empty override: tape computes x^2 grad", grad(f_empty_override)(3.0), 6.0)
+assert_close("empty override: tape computes x^2 grad", grad(f_empty_override)(3.0)("x"), 6.0)
 
 # 12f. Tape wins for omitted params even when other params are overridden.
 #      f(x,y,z) = x*y + z^2; override only y; tape handles x and z.
@@ -447,6 +451,45 @@ var gxyz = grad(f3p)(3.0, 4.0, 2.0)
 assert_close("3-param: tape x (=y=4)",  gxyz("x"), 4.0)   # ∂/∂x = y = 4
 assert_close("3-param: override y (=x=3)", gxyz("y"), 3.0) # override: x*g = 3
 assert_close("3-param: tape z (=2z=4)", gxyz("z"), 4.0)   # ∂/∂z = 2z = 4
+
+
+# ── Section 13: Tensor element-wise grad ──────────────────────────────────────
+print("=== 13. Tensor element-wise grad ===")
+line()
+
+# grad(f)(tensor) applies the scalar derivative element-wise
+# and returns a keyed map {param_name: gradient_tensor}
+
+var sq_s = (x){ :: x * x }
+var relu_s = (x){ x > 0 :: x, :: 0 } grad (x, g){ x > 0 :: g, :: 0 }
+var d_sq   = grad(sq_s)
+var d_relu = grad(relu_s)
+
+# 1D tensor of known values: sq derivative = 2x
+var z1 = tensor({1.0, 2.0, 3.0})
+var dz1 = d_sq(z1)("x")
+assert_close("tensor grad sq at [0]", dz1(0), 2.0)
+assert_close("tensor grad sq at [1]", dz1(1), 4.0)
+assert_close("tensor grad sq at [2]", dz1(2), 6.0)
+
+# relu derivative: 1 if x>0, 0 otherwise
+var z2 = tensor({-1.0, 0.5, 2.0})
+var dz2 = d_relu(z2)("x")
+assert_close("tensor grad relu at [-1]",  dz2(0), 0.0)
+assert_close("tensor grad relu at [0.5]", dz2(1), 1.0)
+assert_close("tensor grad relu at [2]",   dz2(2), 1.0)
+
+# Result shape matches input
+assert_eq("tensor grad shape preserved", len(dz1), 3)
+assert_eq("tensor grad shape preserved relu", len(dz2), 3)
+
+# grad(f)(tensor) * tensor — element-wise weighting (typical backward pass)
+var z3 = tensor({1.0, -2.0, 3.0})
+var grad_h = tensor({0.5, 0.5, 0.5})
+var grad_z = grad_h * d_sq(z3)("x")
+assert_close("weighted tensor grad at [0]", grad_z(0), 1.0)   # 0.5 * 2*1
+assert_close("weighted tensor grad at [1]", grad_z(1), -2.0)  # 0.5 * 2*(-2)
+assert_close("weighted tensor grad at [2]", grad_z(2), 3.0)   # 0.5 * 2*3
 
 
 # ── Final report ──────────────────────────────────────────────────────────────

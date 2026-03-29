@@ -326,12 +326,5 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
     if (override_map) val_decref(override_map);
     GC_UNROOT_VALUE();
 
-    /* Single numeric arg: unwrap map to a plain number for ergonomics */
-    if (n == 1 && args[0]->type == VT_NUM && primal_fn->params.len >= 1) {
-        Value *gv = map_get(rval->map, primal_fn->params.s[0]);
-        Value *ret = (gv && gv->type == VT_NUM) ? val_num(gv->nval) : val_none();
-        val_decref(rval);
-        return ret;
-    }
     return rval;
 }

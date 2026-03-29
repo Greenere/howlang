@@ -117,14 +117,8 @@ var ReLUMaps = []{
     },
 
     backward: (grad_out){
-        # grad w.r.t. pre-activation = grad_out * relu'(z)
-        var out = list()
-        (f=0:len(z_saved)){
-            var row = list()
-            (t=0:len(z_saved(f))){ push(row, d_relu(z_saved(f)(t)) * grad_out(f)(t)) }()
-            push(out, row)
-        }()
-        :: tensor(out)
+        # grad w.r.t. pre-activation = grad_out * relu'(z), applied over full 2D map
+        :: d_relu(z_saved)("x") * grad_out
     }
 }
 
@@ -181,9 +175,7 @@ var Dense = [W, b]{
     },
 
     backward: (grad_h, x_in, lr){
-        var dz = list()
-        (i=0:len(z)){ push(dz, d_sigmoid(z(i))) }()
-        var grad_z = grad_h * tensor(dz)
+        var grad_z = grad_h * d_sigmoid(z)("x")
         var grad_x = T(W) @ grad_z
         W -= lr * outer(grad_z, x_in)
         b -= lr * grad_z
