@@ -1,0 +1,307 @@
+# chained_functions.how — design sketch for trailing higher-order wrappers
+#
+# This file is intentionally a language-design sketch, not an executable sample.
+# The goal is to explore a specific syntax idea:
+#
+#     var f = (x){ ... } wrap (y){ ...f... } more (z){ ...f... }
+#
+# where each trailing stage is a higher-order function that captures the value
+# produced by the previous stage.
+#
+# The key idea is NOT:
+#   "define two related functions in one place"
+#
+# The key idea IS:
+#   "define a function, then locally wrap/transform it with more functions"
+#
+# So this is closer to decorator chaining or nested closure composition.
+#
+# Important: the trailing stages do NOT need to share the primary function's
+# call signature. Their parameters can be independent wrapper-configuration
+# arguments.
+
+
+# ── 1. Core intuition ─────────────────────────────────────────────────────
+#
+# Imagined syntax:
+#
+# var f =
+#     (x){ :: x * 2 }
+#     log (x){
+#         print("log: " + str(x))
+#         :: f(x)
+#     }
+#     clamp (x){
+#         x < 0  :: f(0)
+#         x > 10 :: f(10)
+#         :: f(x)
+#     }
+#
+# Intended meaning:
+#   1. build base function f0 = (x){ ... }
+#   2. build wrapper f1 that captures f0
+#   3. build wrapper f2 that captures f1
+#   4. bind final name f = f2
+#
+# So each trailing clause transforms the callable-so-far.
+#
+# And those trailing clauses may have their own independent arguments:
+#
+# var f =
+#     (x){ ... }
+#     trace (label){ ...f... }
+#     retry (times, delay_ms){ ...f... }
+#
+# Here `label`, `times`, and `delay_ms` are wrapper-construction parameters,
+# not call parameters of the original `(x){ ... }`.
+
+
+# ── 2. Equivalent desugaring model ───────────────────────────────────────
+#
+# If the feature is real, it should have a very simple mental model.
+#
+# A chain like:
+#
+# var f = A g B h C
+#
+# should desugar conceptually to something like:
+#
+# var __stage0 = A
+# var __stage1 = ((prev){ :: B using prev })(__stage0)
+# var __stage2 = ((prev){ :: C using prev })(__stage1)
+# var f = __stage2
+#
+# We would not literally expose `prev`; the previous stage would still be
+# referenced by the original binding name inside each trailing clause.
+#
+# But semantically it is staged closure wrapping, not attachment metadata.
+
+
+# ── 3. Independent wrapper args make the idea stronger ───────────────────
+#
+# This point matters a lot:
+#
+#   the tail args can be different from the primary function args
+#
+# That means the chain is not "more bodies for the same function shape".
+# It is a sequence of higher-order wrapper builders.
+#
+# Example feeling:
+#
+# var f =
+#     (x){ :: x * 2 }
+#     trace ("double"){ ...f... }
+#     memo (128){ ...f... }
+#     retry (3, 100){ ...f... }
+#
+# The tail stages are configuring wrappers, not redefining the call signature.
+#
+#
+# ── 4. Why this might be useful ──────────────────────────────────────────
+#
+# This syntax seems strongest for cases where a function is naturally built in
+# layers:
+#
+#   - logging
+#   - input validation
+#   - clamping / sanitizing
+#   - memoization
+#   - timing
+#   - retry / fallback wrappers
+#   - instrumentation
+#
+# In all of these, the later function wants to call the earlier one.
+
+
+# ── 5. Example: logging wrapper ───────────────────────────────────────────
+#
+# Imagined syntax:
+#
+# var square =
+#     (x){ :: x * x }
+#     log (x){
+#         print("square(" + str(x) + ")")
+#         :: square(x)
+#     }
+#
+# Feeling:
+#   - the wrapper is local and obvious
+#   - no separate helper name is needed
+#   - the final callable is the logged one
+
+
+# ── 6. Example: validation + normalization chain ─────────────────────────
+#
+# Imagined syntax:
+#
+# var safe_sqrt =
+#     (x){ :: sqrt(x) }
+#     validate (x){
+#         x < 0 :: !! "negative input"
+#         :: safe_sqrt(x)
+#     }
+#     normalize (x){
+#         x == none :: none
+#         :: safe_sqrt(x)
+#     }
+#
+# This is interesting because each stage conceptually wraps the previous stage,
+# not the original base function.
+#
+# That is important:
+#   - `normalize` should see the validated behavior
+#   - it should not accidentally bypass `validate`
+
+
+# ── 7. Example: wrappers with independent config args ────────────────────
+#
+# This is probably the most important shape to test.
+#
+# Imagined syntax:
+#
+# var fetch_data =
+#     (url){ :: read(url) }
+#     trace ("fetch_data"){
+#         print("[trace] " + "fetch_data")
+#         :: fetch_data(url)
+#     }
+#     retry (3, 100){
+#         # try up to 3 times with 100ms delay
+#         :: fetch_data(url)
+#     }
+#
+# The interesting thing here is:
+#   - `url` belongs to the base callable's runtime call shape
+#   - `"fetch_data"`, `3`, and `100` belong to wrapper construction
+#
+# That means the parser/runtime model should likely treat each tail as:
+#   wrapper_name(config...){ body producing the next callable }
+# not:
+#   "same callable, same signature, different branch"
+#
+#
+# ── 8. Example: memoization shape ────────────────────────────────────────
+#
+# Imagined syntax:
+#
+# var fib =
+#     (n){
+#         n <= 1 :: n,
+#         :: fib(n - 1) + fib(n - 2)
+#     }
+#     memo (n){
+#         # imagined wrapper body that caches calls to fib(n)
+#         :: fib(n)
+#     }
+#
+# This is one of the most compelling cases.
+# The wrapper wants to intercept calls to the recursive function while still
+# referring to the logical function name locally.
+
+
+# ── 9. Why this is not the same as "attached side functions" ─────────────
+#
+# Important distinction:
+#
+# This idea is NOT:
+#   "a function has a companion function named log"
+#
+# It IS:
+#   "the function value is progressively replaced by wrappers"
+#
+# That makes it much more ordinary from a language-semantics point of view.
+# It is just closure composition with nicer syntax.
+
+
+# ── 10. Current Howlang approximation ────────────────────────────────────
+#
+# Today, the closest explicit form is nested wrapper assignment:
+#
+# var base = (x){ :: x * 2 }
+# var logged = (x){
+#     print("log: " + str(x))
+#     :: base(x)
+# }
+# var clamped = (x){
+#     x < 0  :: logged(0),
+#     x > 10 :: logged(10),
+#     :: logged(x)
+# }
+#
+# or, if you want the final name only:
+#
+# var f0 = (x){ :: x * 2 }
+# var f1 = (x){ print("log"), :: f0(x) }
+# var f  = (x){ x < 0 :: f1(0), :: f1(x) }
+#
+# This works, but it feels mechanically named and less local than the imagined
+# trailing chain.
+
+
+# ── 11. What would make the syntax succeed ───────────────────────────────
+#
+# I think the idea works only if these rules are true:
+#
+#   - each trailing stage is explicitly a wrapper of the previous stage
+#   - the previous stage is what the binding name refers to inside that stage
+#   - the final bound name is the last stage
+#   - no hidden protocol lookup is involved
+#
+# If those rules hold, the syntax stays simple:
+#   chained tails are just staged rebinding through closures
+
+
+# ── 12. Where it may become tricky ───────────────────────────────────────
+#
+# A few hard questions would need clear answers:
+#
+#   - Can the trailing names be arbitrary, or are they just visual markers?
+#   - Is `log` / `memo` / `validate` syntax-only, or are those identifiers
+#     visible to the program somehow?
+#   - How do wrapper-construction args bind relative to the wrapped function's
+#     own call args?
+#   - In recursion, does the name inside the wrapper refer to:
+#       - the previous stage, or
+#       - the final fully-wrapped function?
+#
+# That recursion question matters a lot.
+#
+# Two different semantics:
+#
+#   previous-stage capture:
+#       wrapper calls what existed before it
+#
+#   final-name capture:
+#       wrapper calls the fully wrapped final function
+#
+# The first is usually easier to reason about as desugaring.
+# The second may be more useful for recursive decorators like memoization.
+
+
+# ── 13. Strongest use cases ───────────────────────────────────────────────
+#
+# The syntax seems most justified for:
+#
+#   - logging / timing / tracing wrappers
+#   - validation / sanitization wrappers
+#   - memoization
+#   - retries / fallback wrappers
+#   - staged specialization of a callable
+#
+# These are all genuinely higher-order and wrapper-shaped.
+
+
+# ── 14. Gut-check summary ─────────────────────────────────────────────────
+#
+# This version of the idea feels much better than the "attached companion
+# functions" interpretation.
+#
+# Why:
+#   - it stays in ordinary function/closure territory
+#   - it is basically syntactic sugar for nested wrappers
+#   - it fits Howlang's taste for local, compact expression forms
+#   - independent tail args make it useful for real wrapper configuration
+#
+# My current feeling:
+#   this could be a real feature if we define one very crisp desugaring rule
+#   and settle the recursion/capture semantics early.
