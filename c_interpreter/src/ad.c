@@ -294,10 +294,15 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
     val_decref(grad_args[n]);
     free(grad_args);
 
-    /* Treat non-map return (or error) as empty override */
-    if (!override_map || override_map->type != VT_MAP) {
-        if (override_map) val_decref(override_map);
-        override_map = NULL;
+    /* Custom grad blocks must return a keyed map of parameter overrides. */
+    if (override_map && override_map->type != VT_MAP) {
+        Value *bad = override_map;
+        char *got = val_repr(bad);
+        val_decref(bad);
+        free(primals);
+        free(arg_ids);
+        die_at(line, 0, "grad block must return a keyed map, got %s", got);
+        free(got);
     }
 
     /* Build result map: override wins; tape fills omitted numeric params */
