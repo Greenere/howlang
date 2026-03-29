@@ -164,7 +164,8 @@ struct HowTensor {
     int          nelem;     /* total number of elements (product of shape) */
     int         *strides;   /* stride per dimension in elements (row-major) */
     HowTensor   *base;      /* non-NULL if this is a view into another tensor */
-    int          refcount;
+    /* Note: no refcount — lifetime is managed purely by the GC mark/sweep.
+     * The base pointer is kept alive by gc_mark_tensor tracing t->base. */
     int          gc_mark;
     struct HowTensor *gc_next;
 };
@@ -188,53 +189,56 @@ static HowTensor *tensor_new(int ndim, int *shape) {
         t->strides[i] = t->strides[i+1] * shape[i+1];
     t->data   = xmalloc(t->nelem * sizeof(double));
     t->base   = NULL;
-    t->refcount = 1;
     t->gc_mark  = 0;
+    /* Thread-safe insertion — parallel loops (^{}) may allocate tensors
+     * inside workers; must hold g_alloc_mutex like list_new / map_new do. */
+    pthread_mutex_lock(&g_alloc_mutex);
     t->gc_next  = g_all_tensors;
     g_all_tensors = t;
     g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
     return t;
 }
 
 static Value *val_tensor(HowTensor *t) {
     Value *v = val_new(VT_TENSOR);
     v->tensor = t;
-    t->refcount++;
     return v;
 }
 ```
 
 Add `HowTensor *tensor` to the `Value` union.
 
-Add `tensor_decref` and GC support:
-```c
-static void tensor_decref(HowTensor *t) {
-    if (!t) return;
-    t->refcount--;
-}
-```
-
 In `val_decref`, add:
 ```c
-case VT_TENSOR: tensor_decref(v->tensor); break;
+case VT_TENSOR: break;  /* GC-managed; no action needed on Value drop */
 ```
 
-In `val_repr`, add:
+In `val_repr`, add a recursive helper and the case:
 ```c
-case VT_TENSOR: {
-    Buf b = {0};
-    buf_append(&b, "[");
-    for (int i = 0; i < t->nelem; i++) {
-        if (i) buf_append(&b, ", ");
-        char tmp[32];
-        double d = t->data[i];
-        if (d == (long long)d) snprintf(tmp,sizeof(tmp),"%lld",(long long)d);
-        else snprintf(tmp,sizeof(tmp),"%g",d);
-        buf_append(&b, tmp);
+static void tensor_repr_dim(HowTensor *t, int dim, int offset, Buf *b) {
+    buf_append(b, "[");
+    for (int i = 0; i < t->shape[dim]; i++) {
+        if (i) buf_append(b, ", ");
+        if (dim == t->ndim - 1) {
+            /* Leaf dimension — print scalars */
+            char tmp[32];
+            double d = t->data[offset + i * t->strides[dim]];
+            if (d == (long long)d) snprintf(tmp,sizeof(tmp),"%lld",(long long)d);
+            else snprintf(tmp,sizeof(tmp),"%g",d);
+            buf_append(b, tmp);
+        } else {
+            tensor_repr_dim(t, dim + 1, offset + i * t->strides[dim], b);
+        }
     }
-    buf_append(&b, "]");
-    /* Prefix shape for 2D+ tensors */
-    if (t->ndim > 1) { /* optionally: prepend shape */ }
+    buf_append(b, "]");
+}
+
+/* In val_repr switch: */
+case VT_TENSOR: {
+    HowTensor *t = v->tensor;
+    Buf b = {0};
+    tensor_repr_dim(t, 0, 0, &b);
     return buf_done(&b);
 }
 ```
@@ -306,8 +310,7 @@ if (callee->type == VT_TENSOR) {
     view->nelem     = 1;
     for (int d = 0; d < view->ndim; d++) view->nelem *= view->shape[d];
     view->data      = t->data + i * t->strides[0];  /* pointer into parent */
-    view->base      = t; t->refcount++;              /* hold parent alive */
-    view->refcount  = 1;
+    view->base      = t;   /* gc_mark_tensor traces base to keep parent alive */
     view->gc_mark   = 0;
     view->gc_next   = g_all_tensors;
     g_all_tensors   = view;
@@ -349,21 +352,26 @@ to handle `VT_TENSOR`:
 Add a tensor arithmetic helper before `eval`:
 
 ```c
-/* Check shapes match for element-wise ops */
+/* Build a shape string like "{2,3}" for error messages */
+static void tensor_shape_str(HowTensor *t, char *buf, int bufsz) {
+    int pos = 0;
+    pos += snprintf(buf+pos, bufsz-pos, "{");
+    for (int i = 0; i < t->ndim; i++)
+        pos += snprintf(buf+pos, bufsz-pos, "%d%s", t->shape[i], i<t->ndim-1?",":"");
+    snprintf(buf+pos, bufsz-pos, "}");
+}
+
+/* Check shapes match exactly for element-wise ops.
+ * Checking only nelem is insufficient: {2,3} and {3,2} have equal nelem=6
+ * but are incompatible layouts. Check each dimension individually. */
 static void tensor_check_shapes(HowTensor *a, HowTensor *b, int line, const char *op) {
-    if (a->ndim != b->ndim || a->nelem != b->nelem) {
-        /* Build shape strings for the error message */
-        char sa[64] = "{", sb[64] = "{";
-        for (int i = 0; i < a->ndim; i++) {
-            char tmp[16]; snprintf(tmp,sizeof(tmp),"%d%s",a->shape[i],i<a->ndim-1?",":"");
-            strncat(sa,tmp,sizeof(sa)-strlen(sa)-1);
-        }
-        strncat(sa,"}",sizeof(sa)-strlen(sa)-1);
-        for (int i = 0; i < b->ndim; i++) {
-            char tmp[16]; snprintf(tmp,sizeof(tmp),"%d%s",b->shape[i],i<b->ndim-1?",":"");
-            strncat(sb,tmp,sizeof(sb)-strlen(sb)-1);
-        }
-        strncat(sb,"}",sizeof(sb)-strlen(sb)-1);
+    int ok = (a->ndim == b->ndim);
+    for (int d = 0; ok && d < a->ndim; d++)
+        ok = (a->shape[d] == b->shape[d]);
+    if (!ok) {
+        char sa[64], sb[64];
+        tensor_shape_str(a, sa, sizeof(sa));
+        tensor_shape_str(b, sb, sizeof(sb));
         die_at(line, 0, "tensor shapes %s and %s incompatible for '%s'", sa, sb, op);
     }
 }
@@ -383,14 +391,14 @@ static Value *tensor_elemwise(HowTensor *a, HowTensor *b, const char *op, int li
         }
         else die_at(line, 0, "unsupported element-wise op '%s'", op);
     }
-    Value *v = val_tensor(out); tensor_decref(out); return v;
+    return val_tensor(out);
 }
 
 /* Tensor scaled by a scalar */
 static Value *tensor_scale(HowTensor *t, double s, int line) {
     HowTensor *out = tensor_new(t->ndim, t->shape);
     for (int i = 0; i < t->nelem; i++) out->data[i] = t->data[i] * s;
-    Value *v = val_tensor(out); tensor_decref(out); return v;
+    return val_tensor(out);
 }
 ```
 
@@ -432,18 +440,22 @@ if (l->type == VT_TENSOR || r->type == VT_TENSOR) {
             return res;
         }
     }
-    /* tensor + scalar  or  scalar + tensor (broadcast add) */
+    /* tensor + scalar  or  scalar ± tensor (broadcast add/sub) */
     if (!strcmp(op,"+") || !strcmp(op,"-")) {
-        double s = 0;
-        HowTensor *t = NULL;
-        int sign = !strcmp(op,"-") ? -1 : 1;
-        if (l->type==VT_TENSOR && r->type==VT_NUM) { t=l->tensor; s=r->nval*sign; }
-        if (l->type==VT_NUM && r->type==VT_TENSOR) { t=r->tensor; s=l->nval; sign=1; }
-        if (t) {
-            HowTensor *out = tensor_new(t->ndim, t->shape);
-            for (int i=0; i<t->nelem; i++)
-                out->data[i] = (l->type==VT_TENSOR) ? t->data[i]+s : s+t->data[i]*sign;
-            res = val_tensor(out); tensor_decref(out);
+        HowTensor *out = NULL;
+        if (l->type==VT_TENSOR && r->type==VT_NUM) {
+            double s = !strcmp(op,"+") ? r->nval : -r->nval;
+            out = tensor_new(l->tensor->ndim, l->tensor->shape);
+            for (int i=0; i<l->tensor->nelem; i++) out->data[i] = l->tensor->data[i] + s;
+        } else if (l->type==VT_NUM && r->type==VT_TENSOR) {
+            /* scalar - tensor: each element = scalar OP tensor[i], not tensor[i] OP scalar */
+            out = tensor_new(r->tensor->ndim, r->tensor->shape);
+            for (int i=0; i<r->tensor->nelem; i++)
+                out->data[i] = !strcmp(op,"+") ? l->nval + r->tensor->data[i]
+                                               : l->nval - r->tensor->data[i];
+        }
+        if (out) {
+            res = val_tensor(out);
             GC_UNROOT_VALUE(); GC_UNROOT_VALUE();
             val_decref(l); val_decref(r);
             return res;
@@ -463,7 +475,6 @@ if (old->type == VT_TENSOR) {
         const char *base_op = !strcmp(op,"+=") ? "+" :
                               !strcmp(op,"-=") ? "-" :
                               !strcmp(op,"*=") ? "*" : "/";
-        Value *old_v = old; val->refcount++;  /* temp ref */
         Value *res;
         if (val->type == VT_TENSOR)
             res = tensor_elemwise(old->tensor, val->tensor, base_op, line);
@@ -476,7 +487,7 @@ if (old->type == VT_TENSOR) {
                 HowTensor *out = tensor_new(old->tensor->ndim, old->tensor->shape);
                 double s = (!strcmp(base_op,"+")) ? val->nval : -val->nval;
                 for (int i=0; i<out->nelem; i++) out->data[i] = old->tensor->data[i] + s;
-                res = val_tensor(out); tensor_decref(out);
+                res = val_tensor(out);
             }
         } else die_at(line, 0, "incompatible types for tensor %s", op);
         val_decref(val); GC_UNROOT_VALUE(); GC_UNROOT_VALUE();
@@ -509,14 +520,20 @@ static Value *tensor_matmul(HowTensor *a, HowTensor *b, int line) {
     /* Supported shapes:
        (m,k) @ (k,n) → (m,n)
        (m,k) @ (k)   → (m)    matrix-vector
-       (k)   @ (k)   → scalar  dot product    */
+       (k)   @ (k)   → scalar  dot product
+     *
+     * Uses strides for all indexing so views (including T() results) work
+     * correctly. T() returns a copy with row-major strides, so in practice
+     * all inputs here are contiguous — but using strides is correct either way.
+     */
     if (a->ndim == 1 && b->ndim == 1) {
         /* Dot product */
-        if (a->nelem != b->nelem)
+        if (a->shape[0] != b->shape[0])
             die_at(line, 0, "dot product: shapes {%d} and {%d} incompatible",
-                   a->nelem, b->nelem);
+                   a->shape[0], b->shape[0]);
         double s = 0;
-        for (int i = 0; i < a->nelem; i++) s += a->data[i] * b->data[i];
+        for (int i = 0; i < a->shape[0]; i++)
+            s += a->data[i * a->strides[0]] * b->data[i * b->strides[0]];
         return val_num(s);
     }
     if (a->ndim == 2 && b->ndim == 1) {
@@ -528,10 +545,11 @@ static Value *tensor_matmul(HowTensor *a, HowTensor *b, int line) {
         HowTensor *out = tensor_new(1, out_shape);
         for (int i = 0; i < m; i++) {
             double s = 0;
-            for (int j = 0; j < k; j++) s += a->data[i*k + j] * b->data[j];
+            for (int j = 0; j < k; j++)
+                s += a->data[i*a->strides[0] + j*a->strides[1]] * b->data[j*b->strides[0]];
             out->data[i] = s;
         }
-        Value *v = val_tensor(out); tensor_decref(out); return v;
+        return val_tensor(out);
     }
     if (a->ndim == 2 && b->ndim == 2) {
         /* Matrix-matrix: (m,k) @ (k,n) → (m,n) */
@@ -544,10 +562,12 @@ static Value *tensor_matmul(HowTensor *a, HowTensor *b, int line) {
         for (int i = 0; i < m; i++)
             for (int j = 0; j < n; j++) {
                 double s = 0;
-                for (int p = 0; p < k; p++) s += a->data[i*k+p] * b->data[p*n+j];
+                for (int p = 0; p < k; p++)
+                    s += a->data[i*a->strides[0] + p*a->strides[1]]
+                       * b->data[p*b->strides[0] + j*b->strides[1]];
                 out->data[i*n+j] = s;
             }
-        Value *v = val_tensor(out); tensor_decref(out); return v;
+        return val_tensor(out);
     }
     die_at(line, 0, "matmul: unsupported tensor dimensions %dD @ %dD", a->ndim, b->ndim);
     return val_none();
@@ -585,7 +605,7 @@ BUILTIN(tensor_fn) {
             if (outer->len == 0) {
                 int shape[] = {0};
                 HowTensor *t = tensor_new(1, shape);
-                Value *v = val_tensor(t); tensor_decref(t); return v;
+                return val_tensor(t);
             }
             if (outer->items[0]->type == VT_LIST) {
                 /* 2D: list of lists */
@@ -603,7 +623,7 @@ BUILTIN(tensor_fn) {
                         t->data[i*cols + j] = row->items[j]->nval;
                     }
                 }
-                Value *v = val_tensor(t); tensor_decref(t); return v;
+                return val_tensor(t);
             }
             /* 1D: list of numbers */
             int shape[] = {outer->len};
@@ -613,7 +633,7 @@ BUILTIN(tensor_fn) {
                     die("tensor(): all elements must be numbers");
                 t->data[i] = outer->items[i]->nval;
             }
-            Value *v = val_tensor(t); tensor_decref(t); return v;
+            return val_tensor(t);
         }
         die("tensor() requires a list argument");
     }
@@ -637,7 +657,7 @@ BUILTIN(tensor_fn) {
                 die("tensor(): all data elements must be numbers");
             t->data[i] = data_list->items[i]->nval;
         }
-        Value *v = val_tensor(t); tensor_decref(t); return v;
+        return val_tensor(t);
     }
     die("tensor() takes 1 or 2 arguments");
     return val_none();
@@ -673,7 +693,7 @@ BUILTIN(transpose_fn) {
     for (int i = 0; i < m; i++)
         for (int j = 0; j < n; j++)
             out->data[j*m + i] = t->data[i*n + j];
-    Value *v = val_tensor(out); tensor_decref(out); return v;
+    return val_tensor(out);
 }
 ```
 
@@ -690,7 +710,7 @@ BUILTIN(outer_fn) {
     for (int i = 0; i < a->nelem; i++)
         for (int j = 0; j < b->nelem; j++)
             out->data[i * b->nelem + j] = a->data[i] * b->data[j];
-    Value *v = val_tensor(out); tensor_decref(out); return v;
+    return val_tensor(out);
 }
 ```
 
@@ -706,7 +726,7 @@ BUILTIN(zeros_fn) {
     HowTensor *t = tensor_new(ndim, shape);
     free(shape);
     memset(t->data, 0, t->nelem * sizeof(double));
-    Value *v = val_tensor(t); tensor_decref(t); return v;
+    return val_tensor(t);
 }
 
 BUILTIN(ones_fn) {
@@ -719,8 +739,7 @@ BUILTIN(ones_fn) {
     HowTensor *t = tensor_new(ndim, shape);
     free(shape);
     for (int i = 0; i < t->nelem; i++) t->data[i] = 1.0;
-    free(shape);
-    Value *v = val_tensor(t); tensor_decref(t); return v;
+    return val_tensor(t);
 }
 
 BUILTIN(eye_fn) {
@@ -730,7 +749,7 @@ BUILTIN(eye_fn) {
     HowTensor *t = tensor_new(2, shape);
     memset(t->data, 0, t->nelem * sizeof(double));
     for (int i = 0; i < n; i++) t->data[i*n + i] = 1.0;
-    Value *v = val_tensor(t); tensor_decref(t); return v;
+    return val_tensor(t);
 }
 ```
 
@@ -751,7 +770,17 @@ BUILTIN(sum_fn) {
         for (int i = 0; i < t->nelem; i++) s += t->data[i];
         return val_num(s);
     }
-    /* Fall through to existing list sum logic */
+    if (ARG(0)->type == VT_LIST) {
+        /* sum() on a plain list of numbers */
+        HowList *lst = ARG(0)->list;
+        double s = 0;
+        for (int i = 0; i < lst->len; i++) {
+            if (lst->items[i]->type != VT_NUM)
+                die("sum(): list elements must be numbers");
+            s += lst->items[i]->nval;
+        }
+        return val_num(s);
+    }
     die("sum() requires a tensor or list");
     return val_none();
 }
@@ -766,7 +795,7 @@ if (argc == 2 && ARG(0)->type == VT_NUM && ARG(1)->type == VT_TENSOR) {
     HowTensor *out = tensor_new(t->ndim, t->shape);
     for (int i = 0; i < t->nelem; i++)
         out->data[i] = t->data[i] > threshold ? t->data[i] : threshold;
-    Value *v = val_tensor(out); tensor_decref(out); return v;
+    return val_tensor(out);
 }
 ```
 
@@ -777,7 +806,7 @@ if (ARG(0)->type == VT_TENSOR) {
     HowTensor *t = ARG(0)->tensor;
     HowTensor *out = tensor_new(t->ndim, t->shape);
     for (int i = 0; i < t->nelem; i++) out->data[i] = fabs(t->data[i]);
-    Value *v = val_tensor(out); tensor_decref(out); return v;
+    return val_tensor(out);
 }
 ```
 
@@ -864,6 +893,24 @@ assert_eq("list concat element",     cat(3),   4)
 - The branch model, classes, loops: completely untouched
 - The `@` token does not conflict with anything: `@` is currently an unexpected
   character that raises a lex error — now it's a valid operator
+
+---
+
+## Out of scope: AD + tensor interaction
+
+The existing `grad()` / `how_diff()` reverse-mode AD works on scalar `VT_NUM`
+values. It is **not extended** by this proposal. Specifically:
+
+- `grad(f, tensor_arg)` will not work — the tape stores scalar IDs and the
+  backward pass expects scalar outputs.
+- The fast-tensor `mlp.how` migration replaces the hand-written forward/backward
+  with operator syntax, but continues to compute gradients manually (as it does
+  today) rather than via `grad()`.
+- A future "tensor AD" proposal would need tape entries to carry `double[]`
+  gradient vectors and a matching backward pass over tensor ops. That is a
+  separate project.
+
+Do not mix `grad()` and tensor-valued variables in the same computation.
 
 ## Optional: BLAS acceleration
 
