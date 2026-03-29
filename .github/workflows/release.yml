@@ -41,10 +41,11 @@ jobs:
           $HOW samples/tests/test_all.how
           $HOW samples/tests/test_loops.how
           $HOW samples/tests/test_parallel.how
-          cd samples
-          ../c_interpreter/build/howlang tests/graph_test.how
-          ../c_interpreter/build/howlang tests/lru_cache_test.how
-          ../c_interpreter/build/howlang tests/brainfuck_test.how
+          $HOW samples/tests/test_grad.how
+          $HOW samples/tests/test_tensor.how
+          $HOW samples/tests/test_try_catch.how
+          $HOW samples/tests/test_functional.how
+          $HOW samples/tests/test_named_args.how
 
       - name: Rename artifact
         run: cp c_interpreter/build/howlang ${{ matrix.artifact }}
