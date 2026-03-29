@@ -51,12 +51,12 @@ void print_source_context(FILE *f, int line, int col)
    prompt instead of terminating the process. */
 static jmp_buf g_repl_jmp;
 static int     g_repl_active  = 0;
-static char    g_repl_errmsg[512];
+static char    g_repl_errmsg[2048];
 
 void        how_repl_begin(void)  { g_repl_active = 1; }
 void        how_repl_end(void)    { g_repl_active = 0; }
 int         how_repl_is_active(void) { return g_repl_active; }
-int         how_repl_setjmp(void) { return setjmp(g_repl_jmp); }
+jmp_buf    *how_repl_jmpbuf(void) { return &g_repl_jmp; }
 void        how_repl_longjmp(void){ longjmp(g_repl_jmp, 1); }
 const char *how_repl_error(void)  { return g_repl_errmsg; }
 
@@ -82,8 +82,59 @@ static void repl_format_loc_message(char *dst, size_t dst_sz,
         off += snprintf(dst + off, dst_sz - (size_t)off,
                         "\n  --> %s:%d", g_current_source_name, line);
         if (col > 0 && (size_t)off < dst_sz)
-            snprintf(dst + off, dst_sz - (size_t)off, ":%d", col);
+            off += snprintf(dst + off, dst_sz - (size_t)off, ":%d", col);
+        if (g_current_source_text && (size_t)off < dst_sz)
+        {
+            const char *src = g_current_source_text, *cur = src;
+            int cur_line = 1;
+            while (*cur && cur_line < line)
+            {
+                if (*cur == '\n')
+                    cur_line++;
+                cur++;
+            }
+            if (cur_line == line)
+            {
+                const char *line_start = cur;
+                while (*cur && *cur != '\n')
+                    cur++;
+                off += snprintf(dst + off, dst_sz - (size_t)off, "\n%4d | ", line);
+                if ((size_t)off < dst_sz)
+                {
+                    size_t line_len = (size_t)(cur - line_start);
+                    size_t room = dst_sz - (size_t)off;
+                    size_t copy = (line_len < room - 1) ? line_len : (room > 1 ? room - 1 : 0);
+                    if (copy > 0)
+                    {
+                        memcpy(dst + off, line_start, copy);
+                        off += (int)copy;
+                        dst[off] = '\0';
+                    }
+                }
+                if (col > 0 && (size_t)off < dst_sz)
+                {
+                    off += snprintf(dst + off, dst_sz - (size_t)off, "\n     | ");
+                    for (int i = 1; i < col && (size_t)off + 1 < dst_sz; i++)
+                        dst[off++] = (line_start[i - 1] == '\t') ? '\t' : ' ';
+                    if ((size_t)off + 1 < dst_sz)
+                    {
+                        dst[off++] = '^';
+                        dst[off] = '\0';
+                    }
+                }
+            }
+        }
     }
+}
+
+void how_repl_set_loc_errorf(const char *kind, int line, int col, const char *fmt, ...)
+{
+    va_list ap;
+    char msg[1024];
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    repl_format_loc_message(g_repl_errmsg, sizeof(g_repl_errmsg), kind, line, col, msg);
 }
 
 /* ── Fatal error helpers ─────────────────────────────────────────────────── */
@@ -98,8 +149,7 @@ void die(const char *fmt, ...)
     va_end(ap);
     if (g_repl_active)
     {
-        repl_format_loc_message(g_repl_errmsg, sizeof(g_repl_errmsg),
-                                "RuntimeError", 0, 0, msg);
+        how_repl_set_loc_errorf("RuntimeError", 0, 0, "%s", msg);
         how_repl_longjmp();
     }
     fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);
@@ -116,8 +166,7 @@ void die_at(int line, int col, const char *fmt, ...)
     va_end(ap);
     if (g_repl_active)
     {
-        repl_format_loc_message(g_repl_errmsg, sizeof(g_repl_errmsg),
-                                "RuntimeError", line, col, msg);
+        how_repl_set_loc_errorf("RuntimeError", line, col, "%s", msg);
         how_repl_longjmp();
     }
     fprintf(stderr, "\033[31m[RuntimeError]\033[0m %s\n", msg);

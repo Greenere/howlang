@@ -257,7 +257,7 @@ void repl(Env *env) {
 
         /* Run with graceful error recovery */
         how_repl_begin();
-        if (how_repl_setjmp() == 0) {
+        if (setjmp(*how_repl_jmpbuf()) == 0) {
             how_run_source("<repl>", runbuf, env);
         } else {
             /* Error was caught — print it nicely and continue */

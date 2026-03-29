@@ -129,20 +129,12 @@ static Token *p_adv(Parser *p) {
 }
 
 static void repl_parse_error(Token *cur, const char *errmsg, const char *hint) {
-    char full[1536];
-    int off = snprintf(full, sizeof(full), "ParseError: %s", errmsg);
-
-    if (how_current_source_name() && cur->line > 0 && off >= 0 && (size_t)off < sizeof(full)) {
-        off += snprintf(full + off, sizeof(full) - (size_t)off,
-                        "\n  --> %s:%d:%d",
-                        how_current_source_name(), cur->line, cur->col);
+    how_repl_set_loc_errorf("ParseError", cur->line, cur->col, "%s", errmsg);
+    if (hint) {
+        char full[2048];
+        snprintf(full, sizeof(full), "%s\n%s", how_repl_error(), hint);
+        how_repl_set_errorf("%s", full);
     }
-
-    if (hint && off >= 0 && (size_t)off < sizeof(full)) {
-        snprintf(full + off, sizeof(full) - (size_t)off, "\n%s", hint);
-    }
-
-    how_repl_set_errorf("%s", full);
     how_repl_longjmp();
 }
 
@@ -156,11 +148,7 @@ static Token *p_expect(Parser *p, TT t, const char *msg) {
         snprintf(errmsg, sizeof(errmsg), "%s; expected %s but got %s",
                  msg, token_type_name((int)t), token_type_name((int)cur->type));
         if (how_repl_is_active()) {
-            if (hint)
-                how_repl_set_errorf("ParseError: %s\n%s", errmsg, hint);
-            else
-                how_repl_set_errorf("ParseError: %s", errmsg);
-            how_repl_longjmp();
+            repl_parse_error(cur, errmsg, hint);
         }
         fprintf(stderr, "\033[31m[ParseError]\033[0m %s\n", errmsg);
         if (how_current_source_name() && cur->line > 0)

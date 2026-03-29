@@ -49,8 +49,9 @@ void        how_repl_begin(void);
 void        how_repl_end(void);
 int         how_repl_is_active(void);
 void        how_repl_set_errorf(const char *fmt, ...);
+void        how_repl_set_loc_errorf(const char *kind, int line, int col, const char *fmt, ...);
 const char *how_repl_error(void);
-int         how_repl_setjmp(void);
+jmp_buf    *how_repl_jmpbuf(void);
 void        how_repl_longjmp(void);
 
 #endif
