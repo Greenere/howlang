@@ -4,8 +4,16 @@
 
 The interpreter is in good shape. `howlang_frontend` (lexer + parser + AST) is
 already a clean, standalone library. `howlang_runtime` has a working GC, value
-system, and builtins. The modular split we just did (ad.c, import.c, parallel.c,
-call.c) makes the runtime easier to navigate.
+system, and builtins. The current shallow `src/` split is also a better
+foundation than the original draft assumed:
+
+- `src/frontend/` for lexer/parser/frontend helpers
+- `src/core/` for the driver, GC, and tree-walking evaluator
+- `src/runtime/` for builtins, calls, AD, tensors, imports, and parallel helpers
+
+That organization makes the future compiler/VM layer feel like another explicit
+subsystem rather than something that must be threaded through one monolithic
+directory.
 
 This proposal describes the **minimum changes** needed to add a bytecode compiler
 and VM backend while keeping the tree-walking interpreter intact and all existing
@@ -17,12 +25,12 @@ tests passing.
 
 | Module | Reuse |
 |---|---|
-| `lexer.c`, `parser.c` | Fully reusable as-is |
+| `frontend/lexer.c`, `frontend/parser.c` | Fully reusable as-is |
 | `ast.h` | Reusable as the frontend AST, but it will need compiler metadata fields |
-| `gc.c` — `Value`, GC mark/sweep | Fully reusable for the VM |
-| `builtins.c`, `setup_globals()` | Fully reusable |
-| `import.c` — `exec_import()` | Fully reusable |
-| `call.c` — `eval_call_val()` | Reusable as the mixed-mode interop boundary |
+| `core/gc.c` — `Value`, GC mark/sweep | Fully reusable for the VM |
+| `runtime/builtins.c`, `setup_globals()` | Fully reusable |
+| `runtime/import.c` — `exec_import()` | Fully reusable |
+| `runtime/call.c` — `eval_call_val()` | Reusable as the mixed-mode interop boundary |
 
 The existing tree-walking interpreter is **not removed**. The bytecode path is
 additive — you get both, and can migrate hot paths incrementally.
@@ -37,7 +45,7 @@ semantics and most of the runtime implementation intact.
 ## The real blockers: name resolution, function representation, and scope fidelity
 
 The original version of this proposal understated the gap a little. Name
-resolution is the first blocker, but there are two more practical blockers we
+resolution is the first blocker, but there are a few more practical blockers we
 should acknowledge up front:
 
 1. **`eval()` resolves names at runtime by walking the `Env*` chain.**
@@ -56,6 +64,11 @@ should acknowledge up front:
 3. **Howlang's scopes are not plain expression scopes.**
    `N_BRANCH`, `N_FORLOOP`, `N_CLASS`, named call args, `break` / `next`,
    and assignment-to-undeclared-variable rules all need to survive the lowering.
+
+4. **The current language surface is already richer than the earliest draft assumed.**
+   We now have named-argument calls, `map(...)` / `reduce(...)`, and custom
+   gradients attached with `set_grad(f, rule)`. The compiler plan should target
+   that real language surface, not an older pre-named-args / inline-grad model.
 
 The right first step is still a semantic analysis pass, but the proposal should
 explicitly treat the callable representation and scope rules as part of the MVP,
@@ -83,7 +96,7 @@ testable artifact before the next begins.
 
 ```
 c_interpreter/include/sema.h
-c_interpreter/src/sema.c
+c_interpreter/src/core/sema.c
 ```
 
 Add `sema` to `howlang_runtime` in CMakeLists.txt.
@@ -101,6 +114,8 @@ One pass over the AST, bottom-up. For each function scope it:
 5. Validates compile-time-only invariants we currently discover late at runtime
    such as duplicate named args, unknown named args for statically known callees,
    and assignment to undeclared locals when resolvable statically
+6. Records enough call-shape metadata that the compiler can preserve named-call
+   behavior without rediscovering parameter layouts ad hoc later
 
 ### Structs
 
@@ -271,10 +286,14 @@ This proposal needs one update for the current language: calls now carry
 1. **Canonicalize at compile time** when the callee is statically known
    (`N_IDENT` bound to a user function / class in the same module)
 2. **Emit `OP_CALL_NAMED`** when arg names must be preserved at runtime
-   (dynamic calls, builtins like `print(..., newline=false)`, mixed-mode interop)
+   (dynamic calls, builtins like `print(..., newline=false)`, and mixed-mode interop)
 
 The pragmatic path is: implement both, but only use `OP_CALL_NAMED` when
 canonicalization is impossible.
+
+This is not an edge case anymore. Named arguments are now part of ordinary
+modern Howlang code, so preserving them correctly is part of core language
+support rather than a deferred compatibility detail.
 
 ### Why stack-based over register-based
 
@@ -290,12 +309,12 @@ optimization pass on top.
 ### New files
 
 ```
-c_interpreter/src/compiler.c
-c_interpreter/src/vm.c
+c_interpreter/src/core/compiler.c
+c_interpreter/src/core/vm.c
 c_interpreter/include/vm.h
 ```
 
-Add both to `howlang_runtime` in CMakeLists.txt.
+Add these to a separate `howlang_compiler` target in CMakeLists.txt.
 
 ### Compiler
 
@@ -374,6 +393,15 @@ needs an explicit compiled closure object. Two viable designs:
 I recommend **option 1** because it keeps the interpreter's `HowFunc` meaning
 clean and minimizes accidental branching through AST-only fields in VM code.
 
+One extra runtime constraint from the current codebase: user functions can now
+carry custom gradient metadata via `set_grad(f, rule)`. For the first VM
+milestone we should avoid coupling bytecode execution to AD internals. The
+pragmatic plan is:
+
+1. allow `grad(f)` / `set_grad(...)` to keep using the interpreter-side function model first
+2. let compiled code call those builtins through mixed-mode dispatch
+3. postpone "compiled closures carry native grad metadata" until after the VM is stable
+
 ### VM
 
 ```c
@@ -426,22 +454,24 @@ closures (`make_adder`, `memoize`, etc.) without changing the value system.
 
 ---
 
-## Builtin semantics cleanup worth doing alongside the VM
+## Builtin semantics cleanup already moving in the right direction
 
 This is slightly adjacent to the compiler work, but it is worth writing down now
 because the VM will be much easier to reason about if builtin dispatch follows a
 small number of consistent rules.
 
-Today the builtin surface is a little mixed:
+The earlier draft treated this as mostly future cleanup. That is no longer
+quite true. The language direction is already moving toward a cleaner split:
 
 - `map(coll, fn)` is explicitly element-wise
+- `reduce(coll, fn)` is now part of the collection surface
 - `sum(x)` is a reduction for lists/tensors
-- `abs(x)` is scalar for numbers but also element-wise for tensors
-- `max(...)` is scalar for plain args, reduction for `max(list)`, and also has a
-  special `max(number, tensor)` clamp path used by ReLU-like code
+- `abs(x)` is intended to stay scalar
+- `max(...)` / `min(...)` are intended as scalar comparisons or reductions, not
+  implicit element-wise broadcasts
 
-That works, but it spreads "collection awareness" across otherwise unrelated
-builtins and makes the language harder to predict.
+That is a much better target for a compiler than the older model where unrelated
+math builtins might secretly broadcast or reduce.
 
 ### Recommended rule
 
@@ -468,13 +498,13 @@ Use three semantic buckets and keep them distinct:
 
 ### Concrete recommendation for the current surface
 
-- Make `abs` scalar-only in the long run
+- Keep `abs` scalar-only
 - Keep `sum` as a list/tensor reduction
 - Keep `max` / `min` as:
   - scalar comparison for multiple args
   - reduction for a single list or tensor
-- Do **not** keep special implicit broadcast forms like `max(number, tensor)`
-  long-term; the element-wise version should be written as `map(t, (x){ :: max(c, x) })`
+- Do **not** keep special implicit broadcast forms like `max(number, tensor)`; the
+  element-wise version should be written as `map(t, (x){ :: max(c, x) })`
   or replaced by a dedicated domain helper such as `relu`
 
 This gives a cleaner mental model:
@@ -495,19 +525,23 @@ shapes the compiler/VM may eventually want to special-case:
 That keeps both interpreter and VM behavior easier to document, optimize, and
 test.
 
-### Migration note
+### Compiler consequence
 
-This should be treated as a **semantic cleanup pass**, not as a requirement for
-Phase 3. The VM can preserve current behavior first. Once the backend is stable,
-we can tighten the builtin surface deliberately and update samples/tests in one
-focused change.
+This no longer needs its own cleanup phase in the proposal. The compiler/VM
+mainly benefits from the fact that:
+
+- element-wise behavior stays explicit in the AST as `map(...)`
+- reductions stay recognizable as `sum(...)`, `max(...)`, `min(...)`, `reduce(...)`
+- scalar builtins remain ordinary calls
+
+That is a much cleaner surface for future optimization and documentation.
 
 ---
 
 ## What does NOT change semantically
 
-- `howlang_frontend` — zero changes
-- `gc.c`, `builtins.c` — largely unchanged
+- `howlang_frontend` — zero semantic changes
+- `core/gc.c`, `runtime/builtins.c` — largely unchanged
 - The tree-walking interpreter remains the default until the VM is stable
 - AD (`grad()`) continues to work through the interpreter path first
 
@@ -515,8 +549,12 @@ What *does* change:
 
 - `ast.h` gains compiler metadata
 - `runtime_internal.h` / `Value` gain a compiled callable representation
-- `driver.c` gets compile / disassemble flags
-- `call.c` becomes the mixed-mode boundary for compiled/interpreted calls
+- `core/driver.c` gets compile / disassemble flags
+- `runtime/call.c` becomes the mixed-mode boundary for compiled/interpreted calls
+
+Also, because custom gradients now use `set_grad(f, rule)` instead of inline
+function syntax, the compiler no longer needs to preserve a special parser/runtime
+path for `func ... grad (...) { ... }`. That is one less frontend oddity to carry.
 
 Also: "all existing test suites continue to pass" is too aggressive for the
 first VM milestone. The realistic promise is:
@@ -536,7 +574,8 @@ consumer of `g_globals` and the GC. What does matter:
 
 - `g_alloc_mutex` already protects GC insertions — the VM reuses this
 - `g_gc_suspended` for parallel loops — the VM sets/clears this the same way
-- The AD tape globals — untouched; `grad()` doesn't run through the VM initially
+- The AD tape globals — untouched; `grad()` / `set_grad(...)` do not run through
+  the VM initially
 
 Global state becomes a problem if you want **multiple independent howlang
 instances in the same process** (e.g., for an LSP or test harness). That is a
@@ -546,7 +585,7 @@ later refactor and doesn't block the compiler backend.
 
 ## Driver integration
 
-Add a `-c` / `--compile` flag to `driver.c`:
+Add a `-c` / `--compile` flag to `core/driver.c`:
 
 ```c
 /* Compile + run via VM instead of tree-walking */
@@ -571,17 +610,26 @@ if (use_vm) {
 
 ```cmake
 add_library(howlang_frontend STATIC
-    src/common.c src/lexer.c src/parser.c)
+    src/frontend/common.c
+    src/frontend/lexer.c
+    src/frontend/parser.c)
 
 add_library(howlang_runtime STATIC
-    src/runtime.c src/gc.c src/builtins.c
-    src/call.c src/ad.c src/import.c src/parallel.c
-    src/sema.c)             # ← Phase 1 addition
+    src/core/runtime.c
+    src/core/gc.c
+    src/runtime/tensor.c
+    src/runtime/builtins.c
+    src/runtime/call.c
+    src/runtime/ad.c
+    src/runtime/import.c
+    src/runtime/parallel.c
+    src/core/sema.c)             # ← Phase 1 addition
 
 add_library(howlang_compiler STATIC  # ← Phase 3 addition
-    src/compiler.c src/vm.c)
+    src/core/compiler.c
+    src/core/vm.c)
 
-add_executable(howlang src/driver.c)
+add_executable(howlang src/core/driver.c)
 target_link_libraries(howlang
     howlang_compiler howlang_runtime howlang_frontend m Threads::Threads)
 ```
@@ -596,10 +644,10 @@ built and shipped without the compiler.
 
 | Phase | New files | Deliverable |
 |---|---|---|
-| 1 | `sema.h`, `sema.c` | Name resolution on the real AST (`N_IDENT`, `N_FORLOOP`, named calls) |
+| 1 | `sema.h`, `core/sema.c` | Name resolution on the real AST (`N_IDENT`, `N_FORLOOP`, named calls, closure metadata) |
 | 2 | `bytecode.h` | Defined instruction set, closure ABI, and compiled callable representation |
-| 3a | `compiler.c` | AST → bytecode for the core subset; `-S` disassembly |
-| 3b | `vm.c`, `vm.h` | Stack VM for the core subset; mixed-mode calls work |
+| 3a | `core/compiler.c` | AST → bytecode for the core subset; `-S` disassembly |
+| 3b | `core/vm.c`, `vm.h` | Stack VM for the core subset; mixed-mode calls work |
 | 4 | compiler/vm follow-ups | Classes, catch/throw, parallel loops, full language parity |
 
 After 3b: we have a credible end-to-end compiler backend. After Phase 4: we can
@@ -621,3 +669,22 @@ To keep momentum high, build the compiler backend in this order:
 
 That sequence matches the current interpreter structure well and lets us land
 useful milestones without pretending feature parity is immediate.
+
+---
+
+## Near-term non-goals
+
+To keep this proposal credible, it helps to say clearly what the first compiler
+backend does **not** need to solve:
+
+- It does not need to compile AD internals or run tape logic inside the VM
+- It does not need to optimize `map(...)` / `reduce(...)` callback-heavy code yet
+- It does not need to subsume tensor-heavy samples into bytecode-native kernels
+- It does not need to implement the wishlist from `tensor_ops_proposal.md`
+
+The early success bar is narrower:
+
+- compile ordinary expressions and closures correctly
+- preserve named-call behavior
+- interoperate cleanly with interpreter-side builtins and subsystems
+- create a stable base for later optimization work
