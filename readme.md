@@ -452,52 +452,68 @@ Howlang  |  Ctrl-D or quit() to exit
 
 ## Automatic Differentiation
 
-> [!WARNING]
-> This `grad` clause is incomplete, especially when some parameter is a function
+`grad(f)` returns a new function that computes the gradient of `f`. It always
+returns a **keyed map** — the same key for every call shape — so gradient
+values are always accessed by parameter name.
 
-
-`grad(f)` returns a new function that computes the gradient of `f`. It has the
-same calling convention as `f` but returns gradient information instead of the
-primal value.
-
-| `f` signature | `grad(f)` returns | example |
+| `f` signature | `grad(f)(...)` returns | example |
 |---|---|---|
-| `number → number` | `number` | `grad(f)(3.0)` = scalar derivative |
-| `(a,b,...) → number` | `list` | `{∂f/∂a, ∂f/∂b, ...}` |
-| `() → number` | `map` | `{"a": ∂f/∂a, ...}` for all closed-over vars |
+| `number → number` | `{"x": ∂f/∂x}` | `grad(f)(3.0)("x")` = scalar derivative |
+| `(a,b,...) → number` | `{"a": ∂f/∂a, "b": ∂f/∂b, ...}` | keyed by param name |
+| `tensor → number` | `{"x": grad_tensor}` | element-wise derivative, same shape |
+| `() → number` | `{"a": ∂f/∂a, ...}` | all closed-over numeric vars |
 | `anything → non-number` | `none` | not differentiable |
 
 ```
 # Scalar derivative — forward-mode dual numbers
 var f = (x){ :: x * x + 3 * x }
-grad(f)(3.0)          # 9.0  (= 2*3 + 3)
-grad(grad(f))(3.0)    # 2.0  (second derivative)
+grad(f)(3.0)("x")          # 9.0  (= 2*3 + 3)
+grad(grad(f))(3.0)("x")    # 2.0  (second derivative)
 
-# Multivariate — list of partial derivatives
+# Multivariate — map of partial derivatives keyed by param name
 var g = (x, y){ :: x * x + x * y }
-grad(g)(2.0, 3.0)     # {7.0, 2.0}  ({∂/∂x, ∂/∂y})
+var dg = grad(g)(2.0, 3.0)
+dg("x")   # 7.0  (= 2*2 + 3)
+dg("y")   # 2.0  (= 2)
 
-# Zero-arg closure — reverse-mode tape, returns gradient map
+# Zero-arg closure — reverse-mode tape
 var a = 3.0
 var b = 2.0
 var loss = (){ :: a * a + b }
-grad(loss)()          # {"a": 6.0, "b": 1.0}
-```
+var gs = grad(loss)()
+gs("a")   # 6.0  (= 2*a)
+gs("b")   # 1.0
 
-At the moment `grad()` is still scalar-oriented. Tensor values work well for
-numerical forward execution, but `grad()` is not yet a general tensor-autodiff
-system.
+# Tensor input — scalar grad applied element-wise, returns same-shape tensor
+var relu = (x){ x > 0 :: x, :: 0 } grad (x, g){ x > 0 :: g, :: 0 }
+var z = tensor({-1.0, 2.0, 3.0})
+grad(relu)(z)("x")    # tensor [0, 1, 1]  — relu' at each element
+
+# Gradient descent
+var x_opt = 0.0
+(step=0:100){ x_opt -= 0.1 * grad(f)(x_opt)("x") }()
+```
 
 ### Custom `grad` block
 
 Functions can declare their own backward pass with `grad (params, g){ ... }`.
-`g` is the upstream gradient; the block returns the downstream gradient.
+`g` is the upstream gradient. The block can return either a bare value (used
+for the corresponding parameter) or a `{param: value}` map for partial
+overrides (tape fills in the rest).
 
 ```
-# Explicit sign function gradient
+# Bare return — gradient for the single param
 var abs_val = (x){ x >= 0 :: x, :: -x } grad (x, g){ x >= 0 :: g, :: -g }
-grad(abs_val)(3.0)    # 1.0
-grad(abs_val)(-2.0)   # -1.0
+grad(abs_val)(3.0)("x")    # 1.0
+grad(abs_val)(-2.0)("x")   # -1.0
+
+# Map return — partial override; tape fills unspecified params
+var f = (x, y){ :: x * x + y * y * y } grad (x, y, g){
+    :: {"x": 2.0 * x * g}   # specify x; y computed from tape
+}
+var dg = grad(f)(2.0, 3.0)
+dg("x")   # 4.0  (override: 2*2*1)
+dg("y")   # 27.0 (tape: 3*y^2 = 27)
 ```
 
 Without a `grad` block the runtime uses tape-based reverse-mode AD for
@@ -665,7 +681,7 @@ HOW=./c_interpreter/build/howlang
 $HOW samples/tests/test_all.how          # 54/54 passed
 $HOW samples/tests/test_loops.how        # 41/41 passed
 $HOW samples/tests/test_parallel.how     # 132/132 passed
-$HOW samples/tests/test_grad.how         # 91/91 passed
+$HOW samples/tests/test_grad.how         # 114/114 passed
 
 cd samples
 ../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34 passed
