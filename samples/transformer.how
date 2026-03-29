@@ -1,0 +1,355 @@
+# transformer.how — tiny fully trainable transformer-style alphabet demo
+#
+# Goal:
+#   train a tiny causal self-attention model to continue
+#   "a" -> "ab" -> "abc" -> ... -> "abcdefghijklmnopqrstuvwxyz"
+#
+# Unlike transformer_demo.how, this version trains every parameter:
+#   - token embeddings
+#   - positional embeddings
+#   - Q / K / V / O projections
+#   - feed-forward block
+#   - output head
+#
+# The model is intentionally tiny and the backward pass is written out by hand.
+
+
+# ── Scalar / tensor helpers ───────────────────────────────────────────────
+
+var relu_s = (x){
+    x > 0 :: x,
+    :: 0
+}
+var relu_grad_s = (x){
+    x > 0 :: 1.0,
+    :: 0.0
+}
+
+var softmax = (scores){
+    var m = max(scores)
+    var shifted = map(scores, (x){ :: exp(x - m) })
+    var denom = sum(shifted)
+    :: map(shifted, (x){ :: x / denom })
+}
+
+var one_hot = (idx, n){
+    :: tensor(map(range(n), (i){ i == idx :: 1.0, :: 0.0 }))
+}
+
+var argmax = (v){
+    var best_i = 0
+    var best_v = v(0)
+    (i=1:len(v)){
+        v(i) > best_v: {
+            best_i = i,
+            best_v = v(i)
+        }
+    }()
+    :: best_i
+}
+
+var idx_to_char = (i){ :: chr(97 + i) }
+var ids_to_string = (ids){
+    :: reduce(range(len(ids)), "", (s, i){ :: s + idx_to_char(ids(i)) })
+}
+
+var zeros_rows = (n, d){
+    var rows = list()
+    (i=0:n){ push(rows, zeros({d})) }()
+    :: rows
+}
+
+var zeros_scalars = (n){
+    var xs = list()
+    (i=0:n){ push(xs, 0.0) }()
+    :: xs
+}
+
+var update_row_in_place = (mat, row_idx, grad_row, lr){
+    (j=0:len(grad_row)){
+        mat(row_idx)(j) = mat(row_idx)(j) - lr * grad_row(j)
+    }()
+}
+
+
+# ── Model dimensions ──────────────────────────────────────────────────────
+
+var vocab_size = 26
+var d_model = 8
+var d_ff = 12
+
+
+# ── Trainable parameters ──────────────────────────────────────────────────
+
+var token_embed = zeros({vocab_size, d_model})
+(i=0:vocab_size){
+    token_embed(i)(i % d_model) = 1.0
+    token_embed(i)((i + 3) % d_model) = 0.3
+}
+
+var pos_embed = zeros({vocab_size, d_model})
+(i=0:vocab_size){
+    pos_embed(i)(0) = i / 26.0
+    pos_embed(i)(1) = sin(i / 4.0) * 0.2
+    pos_embed(i)(2) = cos(i / 4.0) * 0.2
+}()
+
+var Wq = eye(d_model)
+var Wk = eye(d_model)
+var Wv = eye(d_model)
+var Wo = eye(d_model)
+
+var W1 = zeros({d_ff, d_model})
+(i=0:d_ff){
+    W1(i)(i % d_model) = 0.8
+    W1(i)((i + 2) % d_model) = 0.2
+}()
+var b1 = zeros({d_ff})
+
+var W2 = zeros({d_model, d_ff})
+(i=0:d_model){
+    W2(i)(i) = 0.8
+    W2(i)((i + 3) % d_ff) = 0.2
+}()
+var b2 = zeros({d_model})
+
+var Wout = zeros({vocab_size, d_model})
+var bout = zeros({vocab_size})
+
+
+# ── Forward helpers ───────────────────────────────────────────────────────
+
+var embed_sequence = (ids){
+    var rows = list()
+    (i=0:len(ids)){
+        push(rows, token_embed(ids(i)) + pos_embed(i))
+    }()
+    :: rows
+}
+
+var model_forward = (ids){
+    var x = embed_sequence(ids)
+    var n = len(ids)
+    var scale = sqrt(d_model)
+
+    var q = list()
+    var k = list()
+    var v = list()
+    (i=0:n){
+        push(q, Wq @ x(i))
+        push(k, Wk @ x(i))
+        push(v, Wv @ x(i))
+    }()
+
+    var attn = list()
+    var ctxs = list()
+    var attn_out = list()
+    var z1s = list()
+    var h1s = list()
+    var ys = list()
+    var logits = list()
+    var probs = list()
+
+    (i=0:n){
+        var scores = list()
+        (j=0:i+1){
+            push(scores, (q(i) @ k(j)) / scale)
+        }()
+        var weights = softmax(scores)
+        push(attn, weights)
+
+        var ctx = zeros({d_model})
+        (j=0:i+1){
+            ctx += v(j) * weights(j)
+        }()
+        push(ctxs, ctx)
+
+        var aout = Wo @ ctx + x(i)
+        push(attn_out, aout)
+
+        var z1 = W1 @ aout + b1
+        push(z1s, z1)
+
+        var h1 = map(z1, relu_s)
+        push(h1s, h1)
+
+        var y = W2 @ h1 + b2 + aout
+        push(ys, y)
+
+        var logit = Wout @ y + bout
+        push(logits, logit)
+
+        push(probs, softmax(logit))
+    }()
+
+    :: {x, q, k, v, attn, ctxs, attn_out, z1s, h1s, ys, logits, probs}
+}
+
+var predict_next = (ids){
+    var cache = model_forward(ids)
+    var probs = cache(11)
+    :: argmax(probs(len(probs) - 1))
+}
+
+var generate = (seed_idx, total_len){
+    var ids = {seed_idx}
+    :: (:){
+        len(ids) >= total_len :: ids,
+        push(ids, predict_next(ids))
+    }()
+}
+
+
+# ── Training step ─────────────────────────────────────────────────────────
+
+var train_step = (ids, targets, lr){
+    var cache = model_forward(ids)
+    var x = cache(0)
+    var q = cache(1)
+    var k = cache(2)
+    var v = cache(3)
+    var attn = cache(4)
+    var ctxs = cache(5)
+    var attn_out = cache(6)
+    var z1s = cache(7)
+    var h1s = cache(8)
+    var ys = cache(9)
+    var probs = cache(11)
+
+    var n = len(ids)
+    var scale = sqrt(d_model)
+    var loss = 0.0
+
+    var gWout = zeros({vocab_size, d_model})
+    var gbout = zeros({vocab_size})
+    var gW2 = zeros({d_model, d_ff})
+    var gb2 = zeros({d_model})
+    var gW1 = zeros({d_ff, d_model})
+    var gb1 = zeros({d_ff})
+    var gWo = zeros({d_model, d_model})
+    var gWq = zeros({d_model, d_model})
+    var gWk = zeros({d_model, d_model})
+    var gWv = zeros({d_model, d_model})
+
+    var dx = zeros_rows(n, d_model)
+    var dq = zeros_rows(n, d_model)
+    var dk = zeros_rows(n, d_model)
+    var dv = zeros_rows(n, d_model)
+
+    (i=0:n){
+        var target = one_hot(targets(i), vocab_size)
+        loss += -log(probs(i)(targets(i)) + 0.000000001)
+
+        # softmax + cross-entropy gradient
+        var dlogits = probs(i) - target
+        gWout += outer(dlogits, ys(i))
+        gbout += dlogits
+
+        var dy = T(Wout) @ dlogits
+
+        # Feed-forward residual block
+        gW2 += outer(dy, h1s(i))
+        gb2 += dy
+        var dh1 = T(W2) @ dy
+        var dz1 = dh1 * map(z1s(i), relu_grad_s)
+        gW1 += outer(dz1, attn_out(i))
+        gb1 += dz1
+        var dattn = dy + T(W1) @ dz1
+
+        # Residual around attention output
+        dx(i) += dattn
+        gWo += outer(dattn, ctxs(i))
+        var dctx = T(Wo) @ dattn
+
+        # Context / attention backward
+        var da = zeros_scalars(i + 1)
+        (j=0:i+1){
+            dv(j) += dctx * attn(i)(j)
+            da(j) = dctx @ v(j)
+        }()
+
+        var weighted = 0.0
+        (j=0:i+1){ weighted += da(j) * attn(i)(j) }()
+        (j=0:i+1){
+            var ds = attn(i)(j) * (da(j) - weighted)
+            dq(i) += k(j) * (ds / scale)
+            dk(j) += q(i) * (ds / scale)
+        }()
+    }()
+
+    # Back through Q/K/V projections and into embeddings
+    (i=0:n){
+        gWq += outer(dq(i), x(i))
+        gWk += outer(dk(i), x(i))
+        gWv += outer(dv(i), x(i))
+
+        dx(i) += T(Wq) @ dq(i)
+        dx(i) += T(Wk) @ dk(i)
+        dx(i) += T(Wv) @ dv(i)
+    }()
+
+    # SGD update
+    Wout -= lr * gWout
+    bout -= lr * gbout
+    W2 -= lr * gW2
+    b2 -= lr * gb2
+    W1 -= lr * gW1
+    b1 -= lr * gb1
+    Wo -= lr * gWo
+    Wq -= lr * gWq
+    Wk -= lr * gWk
+    Wv -= lr * gWv
+
+    (i=0:n){
+        update_row_in_place(token_embed, ids(i), dx(i), lr)
+        update_row_in_place(pos_embed, i, dx(i), lr)
+    }()
+
+    :: loss
+}
+
+
+# ── Data ──────────────────────────────────────────────────────────────────
+
+var input_ids = range(25)             # a..y
+var target_ids = range(1, 26)         # b..z
+
+
+# ── Demo output ───────────────────────────────────────────────────────────
+
+print("═══ Fully Trainable Transformer Demo ═══")
+print("")
+print("Task: learn next-character prediction for the alphabet")
+print("Training pairs: " + ids_to_string(input_ids) + " -> " + ids_to_string(target_ids))
+print("")
+
+var before_ids = generate(0, 26)
+print("Generated from seed 'a' before training:")
+print("  " + ids_to_string(before_ids))
+print("")
+
+var lr = 0.03
+var epochs = 700
+var start = time()
+
+(epoch=0:epochs){
+    var loss = train_step(input_ids, target_ids, lr)
+    epoch % 70 == 0: print("At " + str(time() - start) + "ms epoch " + str(epoch) + "  loss=" + str(loss))
+}()
+
+print("")
+print("Training time: " + str(time() - start) + " ms")
+print("")
+
+var after_ids = generate(0, 26)
+print("Generated from seed 'a' after training:")
+print("  " + ids_to_string(after_ids))
+print("")
+
+print("Attention matrix for prefix 'abcde' after training:")
+var demo_prefix = {0, 1, 2, 3, 4}
+var demo_cache = model_forward(demo_prefix)
+var demo_attn = demo_cache(4)
+(i=0:len(demo_attn)){
+    print("  attn[" + str(i) + "] = " + str(demo_attn(i)))
+}()
