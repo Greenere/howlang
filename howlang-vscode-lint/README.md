@@ -61,7 +61,10 @@ Parallel loop rules:
 - `break` is not allowed; `continue` works normally
 - Returns a list if any iteration used `::`, otherwise `none`
 
-The unbounded auto-loop uses `(:)={ }`:
+The unbounded loop has two valid forms:
+
+- `(:)={ }` for the auto-call form
+- `(:){ }()` for the explicit-call form
 
 ```
 var i = 0
@@ -69,6 +72,12 @@ var i = 0
     i > 4: break,
     i += 1
 }
+
+var j = 0
+(:){
+    j > 4: break,
+    j += 1
+}()
 ```
 
 ---

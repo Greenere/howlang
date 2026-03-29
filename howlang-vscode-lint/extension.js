@@ -314,7 +314,9 @@ function looksLikeKnownColonContext(tokens, index) {
   const next = nextMeaningful(tokens, index + 1);
   if (!prev || !next) return false;
   if (prev.type === 'ident' || prev.type === 'string' || prev.type === 'number' || prev.type === 'close') return true;
+  if (prev.type === 'keyword' && (prev.value === 'true' || prev.value === 'false' || prev.value === 'none')) return true;
   if (prev.type === 'open' && prev.value === '(') return true;   // (:)
+  if (next.type === 'open' && next.value === '{') return true;   // cond: { ... }
   if (next.type === 'close') return true;                         // (x:)
   return false;
 }
@@ -350,8 +352,12 @@ function isInsideLoop(tokens, index) {
     const t1 = tokens[i + 1];
     const t2 = tokens[i + 2];
     const t3 = tokens[i + 3];
-    if (t?.type === 'open' && t.value === '(' && t1?.type === 'op' && t1.value === ':' && t2?.type === 'close' && t2.value === ')' && t3?.type === 'op' && t3.value === '=') {
-      return true;
+    if (t?.type === 'open' && t.value === '(' && t1?.type === 'op' && t1.value === ':' && t2?.type === 'close' && t2.value === ')') {
+      // (:)={ ... } auto-call loop
+      if (t3?.type === 'op' && t3.value === '=') return true;
+      // (:){ ... }() explicit-call loop
+      const bodyOpen = nextMeaningful(tokens, i + 3);
+      if (bodyOpen?.type === 'open' && bodyOpen.value === '{') return true;
     }
     if (t?.type === 'open' && t.value === '(') {
       // (var=start:stop){ ... } — for-range loop

@@ -2,3 +2,4 @@ __pycache__
 .DS*
 build*
 tmp*
+*.vsix

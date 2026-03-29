@@ -1,0 +1,171 @@
+# pathfinding_visualizer.how — terminal BFS pathfinding demo in Howlang
+#
+# This renders a small maze while breadth-first search expands its frontier.
+# At the end it overlays the recovered shortest path from S to G.
+
+
+var maze = {
+    "#######################",
+    "#S....#.......#.......#",
+    "#.##.#.#.#####.#.###.##",
+    "#....#.#.....#.#...#..#",
+    "####.#.#####.#.###.#..#",
+    "#....#.....#.#.....#..#",
+    "#.########.#.#######..#",
+    "#........#.#..........#",
+    "#.######.#.#####.###..#",
+    "#......#...........#G.#",
+    "#######################"
+}
+
+var rows = len(maze)
+var cols = len(maze(0))
+var esc = chr(27)
+var frame_delay = "0.2"
+
+
+var pos_key = (pos){
+    :: str(pos(0)) + "," + str(pos(1))
+}
+
+var in_bounds = (r, c){
+    :: r >= 0 and r < rows and c >= 0 and c < cols
+}
+
+var maze_cell = (r, c){
+    :: maze(r)(c:c+1)
+}
+
+var find_char = (target){
+    var found = none
+    (r=0:rows){
+        (c=0:cols){
+            maze_cell(r, c) == target: {
+                found = {r, c}
+                break
+            }
+        }()
+        found != none: break
+    }()
+    :: found
+}
+
+var neighbors = (pos){
+    var r = pos(0)
+    var c = pos(1)
+    var out = list()
+    var dirs = {{-1,0}, {1,0}, {0,-1}, {0,1}}
+    (i=0:len(dirs)){
+        var rr = r + dirs(i)(0)
+        var cc = c + dirs(i)(1)
+        in_bounds(rr, cc) and maze_cell(rr, cc) != "#": push(out, {rr, cc})
+    }()
+    :: out
+}
+
+var reconstruct_path = (parents, goal){
+    var path = map()
+    var cur = goal
+    :: (:){
+        path(pos_key(cur)) = true
+        var parent = parents(pos_key(cur))
+        parent == none :: path
+        cur = parent
+    }()
+}
+
+var render_state = (frontier, visited, path){
+    (r=0:rows){
+        var line = ""
+        (c=0:cols){
+            var ch = maze_cell(r, c)
+            var k = str(r) + "," + str(c)
+            ch == "#": { line += "#", continue }
+            ch == "S" or ch == "G": { line += ch, continue }
+            path(k) != none: { line += "@", continue }
+            frontier(k) != none: { line += "o", continue }
+            visited(k) != none: { line += ".", continue }
+            line += " "
+        }()
+        print(line)
+    }()
+}
+
+var move_to_previous_frame = (){
+    :: esc + "[" + str(rows + 1) + "A" + esc + "[J"
+}
+
+var first_frame = true
+var draw_frame = (status, frontier, visited, path){
+    first_frame == false : print(move_to_previous_frame(), newline=false)
+    first_frame = false
+    print(status)
+    render_state(frontier, visited, path)
+    run("sleep " + frame_delay)
+}
+
+var bfs_visualize = (start, goal){
+    var queue = list()
+    var qi = 0
+    var visited = map()
+    var frontier = map()
+    var parents = map()
+    var expansions = 0
+
+    push(queue, start)
+    visited(pos_key(start)) = true
+    frontier(pos_key(start)) = true
+
+    draw_frame("initial state", frontier, visited, map())
+
+    :: (:){
+        qi >= len(queue) :: none,
+
+        var cur = queue(qi)
+        qi += 1
+        del_key(frontier, pos_key(cur))
+        expansions += 1
+
+        cur == goal: {
+            var path = reconstruct_path(parents, goal)
+            draw_frame("goal reached after " + str(expansions) + " expansions", map(), visited, path)
+            :: path
+        }
+
+        var ns = neighbors(cur)
+        (i=0:len(ns)){
+            var nb = ns(i)
+            var nb_key = pos_key(nb)
+            visited(nb_key) != none: continue
+            visited(nb_key) = true
+            frontier(nb_key) = true
+            parents(nb_key) = cur
+            push(queue, nb)
+        }()
+
+        # Show a handful of BFS waves without flooding the terminal too much.
+        expansions <= 6 or expansions % 8 == 0: {
+            draw_frame("after expansion " + str(expansions), frontier, visited, map())
+        }
+    }()
+}
+
+
+print("═══ Pathfinding Visualizer ═══")
+print("")
+
+var start = find_char("S")
+var goal = find_char("G")
+var path = bfs_visualize(start, goal)
+
+(){
+   path == none:: {
+    print("No path found.")
+   },
+   path != none:: {
+    print("path length = " + str(len(keys(path)) - 1))
+   }
+}()
+
+print("")
+print("Done.")
