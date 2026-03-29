@@ -49,7 +49,7 @@ var f =
 Each trailing clause:
 
 1. receives its own independent configuration parameters
-2. captures the callable produced so far
+2. captures **only** the callable produced by the immediately previous stage
 3. produces a new callable
 4. becomes the input to the next clause
 
@@ -154,7 +154,8 @@ var f = __stage2
 ```
 
 The trailing body is evaluated in an environment where the original binding
-name (`f`) refers to the **previous stage**, not yet to the final value.
+name (`f`) refers to the **immediately previous stage**, not yet to the final
+value.
 
 That is the simplest “progressive wrapping” interpretation.
 
@@ -216,14 +217,14 @@ wrapped function?
 
 ---
 
-## The key semantic fork
+## Core capture rule
 
-There are two plausible meanings for the name captured inside a trailing clause.
+There is one recommended meaning for the name captured inside a trailing clause.
 
-### Option A — previous-stage capture
+### Previous-stage-only capture
 
 Inside each trailing body, the binding name refers to the callable produced by
-the immediately previous stage.
+the immediately previous stage, and to nothing earlier in the chain.
 
 This gives a clean desugaring story:
 
@@ -240,32 +241,17 @@ Pros:
 - easiest interpreter implementation
 - easy to reason about as local rebinding
 - no magic fixed-point behavior
+- no need for intermediate stage names
+- preserves the feature as a linear wrapper pipeline
 
 Cons:
 
 - wrappers like memoization may not intercept recursive self-calls in the way
   users expect
 
-### Option B — final-name capture
-
-Inside each trailing body, the binding name refers to the final fully wrapped
-callable.
-
-Pros:
-
-- recursive decorators like memoization become more powerful
-- feels natural in some recursive examples
-
-Cons:
-
-- much harder to explain
-- no longer simple staged rebinding
-- introduces fixed-point / self-reference semantics
-- easier to create accidental infinite recursion or confusing wrapper order
-
 ### Recommendation
 
-Start with **Option A: previous-stage capture**.
+Start with **previous-stage-only capture**.
 
 It is more Howlang-like:
 
@@ -274,9 +260,9 @@ It is more Howlang-like:
 - closure-based
 - easy to desugar
 
-If recursive decorator semantics are important later, they can be handled
-deliberately with another mechanism rather than making the base feature harder
-to reason about.
+If recursive decorator semantics or arbitrary earlier-stage access are important
+later, they should be handled by a separate extension rather than making the
+base feature harder to reason about.
 
 ---
 
@@ -374,6 +360,8 @@ If explored experimentally, keep the first version tight:
 3. Use previous-stage capture semantics
 4. The final result is always a callable
 5. No extra reflection or runtime protocol lookup in v1
+6. A trailing clause may only reference the immediately previous stage, not any
+   arbitrary earlier stage in the chain
 
 This keeps the feature understandable and implementation effort bounded.
 
@@ -419,7 +407,7 @@ That is a strong argument for the feature: it can be mostly a frontend sugar.
    wrapped function’s call args?
 
 4. Do we want any special affordance for recursive decorators later, or is
-   previous-stage capture enough?
+   previous-stage-only capture enough?
 
 5. Does this feature stand on its own, or should it wait until there is a
    stronger body of wrapper-heavy sample code?
@@ -430,15 +418,17 @@ That is a strong argument for the feature: it can be mostly a frontend sugar.
 
 This idea is promising enough to keep exploring.
 
-The strongest version is:
+The strongest version for v1 is:
 
 - **not** companion-function attachment
 - **not** metadata/protocol decoration
 - **yes** to staged higher-order closure wrapping with independent wrapper args
+- **yes** to previous-stage-only capture
+- **no** to arbitrary earlier-stage capture in the initial design
 
 If we prototype it, we should do so with:
 
-- previous-stage capture
+- previous-stage-only capture
 - narrow syntax
 - parser-level desugaring
 
