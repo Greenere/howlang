@@ -447,15 +447,6 @@ Value *eval(Node *node, Env *env, Signal *sig) {
         pthread_mutex_unlock(&g_alloc_mutex);
         fn->is_grad = 0;
         fn->grad_fn = NULL;
-        if (node->func.grad_body) {
-            Signal ginner = {SIG_NONE, NULL};
-            Value *gbv = eval(node->func.grad_body, env, &ginner);
-            if (ginner.type == SIG_NONE && gbv && gbv->type == VT_FUNC) {
-                fn->grad_fn = gbv->func;
-                fn->grad_fn->refcount++;
-            }
-            val_decref(gbv);
-        }
         return v;
     }
 

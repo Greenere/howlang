@@ -1,0 +1,42 @@
+# test_reduce_builtin.how — tests for reduce()
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        passed = passed + 1,
+        print("  PASS  " + label)
+    },
+    got != expected: {
+        failed = failed + 1,
+        print("  FAIL  " + label + "  got=" + str(got) + "  expected=" + str(expected))
+    }
+}
+
+print("─── List form ──────────────────────────────────────────────────────────")
+assert_eq("reduce(list, fn)", reduce({1, 2, 3, 4}, (acc, x){ :: acc + x }), 10)
+assert_eq("reduce(list, init, fn)", reduce({1, 2, 3}, 10, (acc, x){ :: acc + x }), 16)
+
+print("─── Tensor form ────────────────────────────────────────────────────────")
+assert_eq("reduce(tensor, fn)", reduce(tensor({1, 2, 3}), (acc, x){ :: acc + x }), 6)
+assert_eq("reduce(tensor, init, fn)", reduce(tensor({1, 2, 3}), 5, (acc, x){ :: acc + x }), 11)
+
+print("─── Map / instance form ───────────────────────────────────────────────")
+var m = {"a": 1, "b": 2, "c": 3}
+assert_eq("reduce(map, fn) over values", reduce(m, (acc, x){ :: acc + x }), 6)
+
+var Box = [x, y]{
+    x: x,
+    y: y
+}
+assert_eq("reduce(instance, fn) over values", reduce(Box[4, 5], (acc, x){ :: acc + x }), 9)
+
+print("─── String form ────────────────────────────────────────────────────────")
+assert_eq("reduce(string, init, fn)", reduce("abc", "", (acc, ch){ :: acc + ch }), "abc")
+assert_eq("reduce(string utf8, init, fn)", reduce("🙂a", "", (acc, ch){ :: acc + str(len(ch)) }), "41")
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════")

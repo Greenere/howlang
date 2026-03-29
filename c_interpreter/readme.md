@@ -79,6 +79,7 @@ From the repo root:
 ./c_interpreter/build/howlang samples/tests/test_parallel.how  # 31/31
 ./c_interpreter/build/howlang samples/tests/test_named_args.how # 11/11
 ./c_interpreter/build/howlang samples/tests/test_map_builtin.how # 12/12
+./c_interpreter/build/howlang samples/tests/test_reduce_builtin.how # 8/8
 cd samples && ../c_interpreter/build/howlang tests/graph_test.how       # 32/32
 cd samples && ../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34
 cd samples && ../c_interpreter/build/howlang tests/brainfuck_test.how   # 32/32

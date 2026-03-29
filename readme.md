@@ -385,6 +385,8 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `list()`                | Create an empty mutable list                             |
 | `map()`                 | Create an empty mutable map                              |
 | `map(coll, fn)`         | Apply `fn` to each element of a list/map/instance/tensor/string |
+| `reduce(coll, fn)`      | Fold a non-empty list/map/instance/tensor/string via `fn(acc, item)` |
+| `reduce(coll, init, fn)`| Fold a collection starting from an explicit initial value |
 | `tensor(data)`          | Create a tensor from a numeric list or nested list       |
 | `tensor(shape, data)`   | Create a tensor from a shape list and flat numeric data  |
 | `push(lst, v)`          | Append value to list (mutates in place)                  |
@@ -419,6 +421,7 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `args()`                | List of command-line arguments                           |
 | `par(lst, fn)`          | Apply `fn` to each element of `lst` in parallel; returns result list |
 | `gc()`                  | Trigger a garbage collection cycle                       |
+| `set_grad(f, rule)`     | Attach a custom gradient rule used by `grad(f)`          |
 | `grad(f)`               | Return the gradient function of `f` (see Automatic Differentiation)     |
 | `time()`                | Current wall-clock time as milliseconds since Unix epoch                |
 | `time(fn)`              | Call `fn()` and return elapsed wall-clock milliseconds                  |
@@ -488,7 +491,8 @@ gs("a")   # 6.0  (= 2*a)
 gs("b")   # 1.0
 
 # Tensor input — scalar grad applied element-wise, returns same-shape tensor
-var relu = (x){ x > 0 :: x, :: 0 } grad (x, g){ x > 0 :: g, :: 0 }
+var relu = (x){ x > 0 :: x, :: 0 }
+set_grad(relu, (x, g){ x > 0 :: g, :: 0 })
 var z = tensor({-1.0, 2.0, 3.0})
 grad(relu)(z)("x")    # tensor [0, 1, 1]  — relu' at each element
 
@@ -497,29 +501,31 @@ var x_opt = 0.0
 (step=0:100){ x_opt -= 0.1 * grad(f)(x_opt)("x") }()
 ```
 
-### Custom `grad` block
+### Custom Grad Rules
 
-Functions can declare their own backward pass with `grad (params, g){ ... }`.
-`g` is the upstream gradient. The block can return either a bare value (used
-for the corresponding parameter) or a `{param: value}` map for partial
-overrides (tape fills in the rest).
+Use `set_grad(f, rule)` to attach a custom backward rule to a function.
+`g` is the upstream gradient. The rule can return either a bare value (used
+for the first parameter) or a `{param: value}` map for partial overrides
+(tape fills in the rest).
 
 ```
 # Bare return — gradient for the single param
-var abs_val = (x){ x >= 0 :: x, :: -x } grad (x, g){ x >= 0 :: g, :: -g }
+var abs_val = (x){ x >= 0 :: x, :: -x }
+set_grad(abs_val, (x, g){ x >= 0 :: g, :: -g })
 grad(abs_val)(3.0)("x")    # 1.0
 grad(abs_val)(-2.0)("x")   # -1.0
 
 # Map return — partial override; tape fills unspecified params
-var f = (x, y){ :: x * x + y * y * y } grad (x, y, g){
+var f = (x, y){ :: x * x + y * y * y }
+set_grad(f, (x, y, g){
     :: {"x": 2.0 * x * g}   # specify x; y computed from tape
-}
+})
 var dg = grad(f)(2.0, 3.0)
 dg("x")   # 4.0  (override: 2*2*1)
 dg("y")   # 27.0 (tape: 3*y^2 = 27)
 ```
 
-Without a `grad` block the runtime uses tape-based reverse-mode AD for
+Without a custom grad rule the runtime uses tape-based reverse-mode AD for
 zero-arg closures, and forward-mode dual numbers for all other cases.
 
 ---

@@ -22,13 +22,29 @@
 var relu_s = (x){
     x > 0 :: x,
     :: 0
-} grad (x, g){
+}
+set_grad(relu_s, (x, g){
     x > 0 :: g,
     :: 0
-}
-var d_relu = grad(relu_s)
+})
 var sigmoid_s = (x){ :: 0.5 + 0.5 * x / (1 + abs(x)) }
-var d_sigmoid  = grad(sigmoid_s)
+var relu_grad_s = (x){
+    x > 0 :: 1,
+    :: 0
+}
+var sigmoid_grad_s = (x){ :: 0.5 / ((1 + abs(x)) * (1 + abs(x))) }
+
+
+# ── Small tensor helpers ──────────────────────────────────────────────────
+
+var conv_patches = (x, ks){
+    var T_out = len(x) - ks + 1
+    var rows = list()
+    (t=0:T_out){
+        push(rows, map(range(ks), (k){ :: x(t + k) }))
+    }()
+    :: tensor(rows)
+}
 
 
 # ── Conv1D layer ──────────────────────────────────────────────────────────
@@ -47,20 +63,19 @@ var Conv1D = [kernels, bias]{
     kernels: kernels,
     bias:    bias,
     x_saved: list(),   # input saved during forward pass (needed for backward)
+    patches_saved: list(),
 
     forward: (x){
         x_saved = x,
         var nf     = len(kernels)
         var ks     = len(kernels(0))
-        var T      = len(x)
-        var T_out  = T - ks + 1
-        var maps   = list()
+        patches_saved = conv_patches(x, ks),
+        var maps_raw = kernels @ T(patches_saved)
+        var maps = list()
         (f=0:nf){
             var row = list()
-            (t=0:T_out){
-                var s = bias(f)
-                (k=0:ks){ s += kernels(f)(k) * x(t+k) }()
-                push(row, s)
+            (t=0:len(maps_raw(f))){
+                push(row, maps_raw(f)(t) + bias(f))
             }()
             push(maps, row)
         }()
@@ -72,33 +87,25 @@ var Conv1D = [kernels, bias]{
         var ks    = len(kernels(0))
         var T     = len(x_saved)
         var T_out = T - ks + 1
+        var dkernel = grad_maps @ patches_saved
+        var db = tensor(map(range(nf), (f){ :: sum(grad_maps(f)) }))
 
-        # Update kernels and biases
-        (f=0:nf){
-            (k=0:ks){
-                var dk = 0
-                (t=0:T_out){ dk += grad_maps(f)(t) * x_saved(t+k) }()
-                kernels(f)(k) = kernels(f)(k) - lr * dk
-            }()
-
-            var db = 0
-            (t=0:T_out){ db += grad_maps(f)(t) }()
-            bias(f) = bias(f) - lr * db
-        }()
-
-        # Gradient w.r.t. input (full convolution with flipped kernel)
-        var grad_x = list()
-        (t=0:T){
-            var dx = 0
+        var grad_x = tensor(map(range(T), (t){
+            # This is a reduction semantically, but the explicit loops are
+            # faster than nested reduce(...) callbacks in the current interpreter.
+            var dx = 0.0
             (f=0:nf){
                 (k=0:ks){
                     var t_src = t - k
                     t_src >= 0 && t_src < T_out: dx += grad_maps(f)(t_src) * kernels(f)(k)
                 }()
             }()
-            push(grad_x, dx)
-        }()
-        :: tensor(grad_x)
+            :: dx
+        }))
+
+        kernels -= lr * dkernel
+        bias -= lr * db
+        :: grad_x
     }
 }
 
@@ -117,8 +124,7 @@ var ReLUMaps = []{
     },
 
     backward: (grad_out){
-        # grad w.r.t. pre-activation = grad_out * relu'(z), applied over full 2D map
-        :: d_relu(z_saved)("x") * grad_out
+        :: map(z_saved, relu_grad_s) * grad_out
     }
 }
 
@@ -130,27 +136,15 @@ var ReLUMaps = []{
 # backward: flat tensor gradient  →  feature-map tensor (distribute uniformly)
 
 var GlobalAvgPool = []{
-    t_len_saved: list(),   # saved temporal lengths for backward
+    t_len_saved: 0,   # saved temporal length for backward
 
     forward: (maps){
-        t_len_saved = list(),
-        var out = list()
-        (f=0:len(maps)){
-            push(t_len_saved, len(maps(f)))
-            push(out, sum(maps(f)) / len(maps(f)))
-        }()
-        :: tensor(out)
+        t_len_saved = len(maps(0)),
+        :: maps @ (ones({t_len_saved}) / t_len_saved)
     },
 
     backward: (grad_vec){
-        var out = list()
-        (f=0:len(grad_vec)){
-            var T = t_len_saved(f)
-            var row = list()
-            (t=0:T){ push(row, grad_vec(f) / T) }()
-            push(out, row)
-        }()
-        :: tensor(out)
+        :: outer(grad_vec, ones({t_len_saved}) / t_len_saved)
     }
 }
 
@@ -173,7 +167,7 @@ var Dense = [W, b]{
     },
 
     backward: (grad_h, x_in, lr){
-        var grad_z = grad_h * d_sigmoid(z)("x")
+        var grad_z = grad_h * map(z, sigmoid_grad_s)
         var grad_x = T(W) @ grad_z
         W -= lr * outer(grad_z, x_in)
         b -= lr * grad_z

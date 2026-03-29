@@ -15,8 +15,8 @@
 
 # ── Scalar activation functions ───────────────────────────────────────────────
 #
-# relu_s uses a custom grad block because the `:: 0` branch returns a plain
-# number, which breaks forward-mode autodiff at the kink.  The grad block
+# relu_s uses a custom gradient because the `:: 0` branch returns a plain
+# number, which breaks forward-mode autodiff at the kink. `set_grad(...)`
 # spells out the correct subgradient explicitly.
 #
 # sigmoid_s is smooth and composed entirely of arithmetic + abs, so grad()
@@ -25,10 +25,11 @@
 var relu_s = (x){
     x > 0 :: x,
     :: 0
-} grad (x, g){
+}
+set_grad(relu_s, (x, g){
     x > 0 :: g,
     :: 0
-}
+})
 
 var sigmoid_s = (x){ :: 0.5 + 0.5 * x / (1 + abs(x)) }
 

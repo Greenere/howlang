@@ -47,6 +47,24 @@ static Value *call_map_callback(Value *fn, Value *item) {
     return res;
 }
 
+static Value *call_reduce_callback(Value *fn, Value *acc, Value *item) {
+    Signal sig = {SIG_NONE, NULL};
+    Value *args[2] = {acc, item};
+    Value *res = eval_call_val(fn, args, NULL, 2, &sig, 0);
+    if (sig.type == SIG_ERROR) {
+        char *s = sig.retval ? val_repr(sig.retval) : xstrdup("unknown error");
+        if (sig.retval) val_decref(sig.retval);
+        if (res) val_decref(res);
+        die("reduce(): callback error: %s", s);
+    }
+    if (sig.type == SIG_RETURN && sig.retval) {
+        if (res) val_decref(res);
+        res = sig.retval;
+        sig.retval = NULL;
+    }
+    return res;
+}
+
 /* ── Built-in function implementations ──────────────────────────────────── */
 
 BUILTIN(print) {
@@ -310,6 +328,108 @@ BUILTIN(map_fn) {
     }
 
     die("map() requires a list, map, instance, tensor, or string as first argument");
+    return val_none();
+}
+
+BUILTIN(reduce_fn) {
+    Value *src, *fn, *acc;
+    int have_init = 0;
+
+    if (argc == 2) {
+        src = ARG(0);
+        fn = ARG(1);
+    } else if (argc == 3) {
+        src = ARG(0);
+        acc = val_incref(ARG(1));
+        fn = ARG(2);
+        have_init = 1;
+    } else {
+        die("reduce() requires 2 or 3 arguments");
+        return val_none();
+    }
+
+    if (src->type == VT_LIST) {
+        HowList *list = src->list;
+        int start = 0;
+        if (!have_init) {
+            if (list->len == 0) die("reduce(list, fn) requires a non-empty list or an explicit initial value");
+            acc = val_incref(list->items[0]);
+            start = 1;
+        }
+        for (int i = start; i < list->len; i++) {
+            Value *next = call_reduce_callback(fn, acc, list->items[i]);
+            val_decref(acc);
+            acc = next;
+        }
+        return acc;
+    }
+
+    if (src->type == VT_MAP || src->type == VT_INSTANCE) {
+        HowMap *map = src->type == VT_MAP ? src->map : src->inst->fields;
+        int start = 0;
+        if (!have_init) {
+            if (map->len == 0) die("reduce(map, fn) requires a non-empty map or an explicit initial value");
+            acc = val_incref(map->pairs[0].val);
+            start = 1;
+        }
+        for (int i = start; i < map->len; i++) {
+            Value *next = call_reduce_callback(fn, acc, map->pairs[i].val);
+            val_decref(acc);
+            acc = next;
+        }
+        return acc;
+    }
+
+    if (src->type == VT_TENSOR) {
+        HowTensor *t = src->tensor;
+        int start = 0;
+        if (!have_init) {
+            if (t->nelem == 0) die("reduce(tensor, fn) requires a non-empty tensor or an explicit initial value");
+            acc = val_num(t->data[0]);
+            start = 1;
+        }
+        for (int i = start; i < t->nelem; i++) {
+            Value *item = val_num(t->data[i]);
+            Value *next = call_reduce_callback(fn, acc, item);
+            val_decref(item);
+            val_decref(acc);
+            acc = next;
+        }
+        return acc;
+    }
+
+    if (src->type == VT_STR) {
+        const char *p = src->sval;
+        if (!have_init) {
+            int codepoint = 0, nbytes = 0;
+            char ch[5];
+            if (!*p) die("reduce(string, fn) requires a non-empty string or an explicit initial value");
+            if (!how_utf8_decode_one(p, &codepoint, &nbytes))
+                die("reduce(string, fn): invalid UTF-8");
+            memcpy(ch, p, (size_t)nbytes);
+            ch[nbytes] = '\0';
+            acc = val_str(ch);
+            p += nbytes;
+        }
+        while (*p) {
+            int codepoint = 0, nbytes = 0;
+            char ch[5];
+            if (!how_utf8_decode_one(p, &codepoint, &nbytes))
+                die("reduce(string, fn): invalid UTF-8");
+            memcpy(ch, p, (size_t)nbytes);
+            ch[nbytes] = '\0';
+            Value *item = val_str(ch);
+            Value *next = call_reduce_callback(fn, acc, item);
+            val_decref(item);
+            val_decref(acc);
+            acc = next;
+            p += nbytes;
+        }
+        return acc;
+    }
+
+    if (have_init) val_decref(acc);
+    die("reduce() requires a list, map, instance, tensor, or string as first argument");
     return val_none();
 }
 
@@ -609,6 +729,22 @@ BUILTIN(gc_fn) {
     return val_none();
 }
 
+BUILTIN(set_grad_fn) {
+    NEED(2);
+    if (ARG(0)->type != VT_FUNC) die("set_grad() requires a function as first argument");
+    if (ARG(1)->type != VT_FUNC) die("set_grad() requires a function as second argument");
+
+    HowFunc *target = ARG(0)->func;
+    HowFunc *rule = ARG(1)->func;
+
+    if (target->is_grad) die("set_grad() cannot override grad(...) wrapper functions directly");
+
+    if (target->grad_fn) func_decref(target->grad_fn);
+    target->grad_fn = rule;
+    target->grad_fn->refcount++;
+    return val_incref(ARG(0));
+}
+
 BUILTIN(grad_builtin_fn) {
     NEED(1);
     Value *f = ARG(0);
@@ -878,6 +1014,7 @@ void setup_globals(Env *env) {
     REG("pow",     pow_fn);
     REG("list",    list_fn);
     REG("map",     map_fn);
+    REG("reduce",  reduce_fn);
     REG("push",    push_fn);
     REG("pop",     pop_fn);
     REG("keys",    keys_fn);
@@ -901,6 +1038,7 @@ void setup_globals(Env *env) {
     REG("min",     min_fn);
     REG("quit",    quit_fn);
     REG("gc",      gc_fn);
+    REG("set_grad", set_grad_fn);
     REG("grad",    grad_builtin_fn);
     REG("time",    time_fn);
     REG("par",     par_fn);
