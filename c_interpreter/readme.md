@@ -51,13 +51,21 @@ c_interpreter/
     lexer_internal.h    # Token types shared between lexer and parser (internal)
     runtime_internal.h  # Types, globals, and declarations shared across runtime, gc, builtins (internal)
   src/
-    common.c            # Implementations of common utilities
-    lexer.c             # Tokeniser
-    parser.c            # Parser and AST construction
-    gc.c                # GC state, value/env/map/list constructors, mark-sweep collector
-    builtins.c          # Built-in functions and global environment setup
-    runtime.c           # Evaluator, module import, and public bootstrap/run API
-    driver.c            # CLI entry point and REPL
+    core/
+      driver.c          # CLI entry point and REPL
+      gc.c              # GC state, value/env/map/list constructors, mark-sweep collector
+      runtime.c         # Evaluator and public bootstrap/run API
+    frontend/
+      common.c          # Implementations of common utilities
+      lexer.c           # Tokeniser
+      parser.c          # Parser and AST construction
+    runtime/
+      ad.c              # Automatic differentiation support
+      builtins.c        # Built-in functions and global environment setup
+      call.c            # Function/class invocation and loop-call dispatch
+      import.c          # Module loading and import search paths
+      parallel.c        # Parallel loop support
+      tensor.c          # Tensor operations and tensor helpers
   build/                # CMake output (gitignored)
 ```
 

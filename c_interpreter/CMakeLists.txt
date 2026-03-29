@@ -9,8 +9,21 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_link_options(-fsanitize=address,undefined)
 endif()
 find_package(Threads REQUIRED)
-add_library(howlang_frontend STATIC src/common.c src/lexer.c src/parser.c)
-add_library(howlang_runtime STATIC src/runtime.c src/tensor.c src/ad.c src/import.c src/parallel.c src/call.c src/gc.c src/builtins.c)
+add_library(howlang_frontend STATIC
+    src/frontend/common.c
+    src/frontend/lexer.c
+    src/frontend/parser.c
+)
+add_library(howlang_runtime STATIC
+    src/core/runtime.c
+    src/core/gc.c
+    src/runtime/tensor.c
+    src/runtime/ad.c
+    src/runtime/import.c
+    src/runtime/parallel.c
+    src/runtime/call.c
+    src/runtime/builtins.c
+)
 target_link_libraries(howlang_runtime PUBLIC howlang_frontend m Threads::Threads)
-add_executable(howlang src/driver.c)
+add_executable(howlang src/core/driver.c)
 target_link_libraries(howlang PRIVATE howlang_runtime howlang_frontend m Threads::Threads)

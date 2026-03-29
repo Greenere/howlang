@@ -656,17 +656,21 @@ howlang/
       lexer_internal.h        # Token types shared between lexer and parser (internal)
       runtime_internal.h      # Types, globals, and declarations shared across runtime, gc, builtins (internal)
     src/
-      common.c                # Implementations of common utilities
-      lexer.c                 # Tokeniser
-      parser.c                # Parser, AST construction, and AST list helpers (nl_push, sl_push, make_node, …)
-      gc.c                    # GC state, value/env/map/list constructors, mark-sweep collector
-      builtins.c              # Built-in functions and global environment setup
-      runtime.c               # Core evaluator (eval/exec_stmt/exec_body/run_branches) and public API
-      ad.c                    # Automatic differentiation: reverse-mode tape, dual numbers, grad
-      call.c                  # Function/class invocation: eval_call_val, instantiate_class, run_loop
-      import.c                # Module search paths and module loading (exec_import)
-      parallel.c              # Parallel for-range loop ^{} via pthreads
-      driver.c                # CLI entry point and REPL
+      core/
+        driver.c              # CLI entry point and REPL
+        gc.c                  # GC state, value/env/map/list constructors, mark-sweep collector
+        runtime.c             # Core evaluator (eval/exec_stmt/exec_body/run_branches) and public API
+      frontend/
+        common.c              # Implementations of common utilities
+        lexer.c               # Tokeniser
+        parser.c              # Parser, AST construction, and AST list helpers (nl_push, sl_push, make_node, …)
+      runtime/
+        ad.c                  # Automatic differentiation: reverse-mode tape, dual numbers, grad
+        builtins.c            # Built-in functions and global environment setup
+        call.c                # Function/class invocation: eval_call_val, instantiate_class, run_loop
+        import.c              # Module search paths and module loading (exec_import)
+        parallel.c            # Parallel for-range loop ^{} via pthreads
+        tensor.c              # Tensor operations and tensor-facing helper routines
     build/                    # CMake build output (gitignored)
   samples/
     how_interpreter/
