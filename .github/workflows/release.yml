@@ -14,6 +14,10 @@ jobs:
   tests:
     uses: ./.github/workflows/release_tests.yml
 
+  linter:
+    needs: tests
+    uses: ./.github/workflows/release_linter.yml
+
   build:
     needs: tests
     name: Build (${{ matrix.os }})
@@ -50,7 +54,9 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs:
+      - build
+      - linter
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -64,5 +70,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: howlang-*
+          files: |
+            howlang-*
+            *.vsix
           generate_release_notes: true

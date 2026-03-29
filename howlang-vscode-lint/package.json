@@ -4,8 +4,17 @@
   "description": "Syntax highlighting and lightweight lint diagnostics for Howlang files.",
   "version": "0.1.0",
   "publisher": "lihaoyang",
+  "license": "MIT",
   "author": {
     "name": "Haoyang Li"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Greenere/howlang.git"
+  },
+  "homepage": "https://github.com/Greenere/howlang/tree/main/howlang-vscode-lint",
+  "bugs": {
+    "url": "https://github.com/Greenere/howlang/issues"
   },
   "icon": "images/icon.png",
   "engines": {
