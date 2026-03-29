@@ -11,6 +11,13 @@ typedef struct Node Node;
 typedef struct NodeList NodeList;
 
 typedef enum {
+    NAME_UNRESOLVED = 0,
+    NAME_LOCAL,
+    NAME_UPVAL,
+    NAME_GLOBAL,
+} NameKind;
+
+typedef enum {
     /* literals */
     N_NUM, N_STR, N_BOOL, N_NONE,
     /* expressions */
@@ -44,9 +51,23 @@ typedef struct MapItem { Node *key; Node *val; } MapItem;  /* NULL key = list el
 typedef struct { MapItem *items; int len; int cap; } MapItemList;
 void mil_push(MapItemList *ml, Node *k, Node *v);
 
+typedef struct {
+    int      valid;   /* 1 once sema has resolved this site */
+    NameKind kind;
+    int      slot;    /* local/upval slot, -1 for globals/unresolved */
+} ResolvedName;
+
+typedef struct {
+    int    nlocals;
+    int    nupvals;
+    char **upval_names;
+} ClosureInfo;
+
 struct Node {
     NodeType type;
     int      line;
+    ResolvedName resolved;
+    ClosureInfo  closure_info;
     union {
         double  nval;
         char   *sval;

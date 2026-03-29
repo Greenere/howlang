@@ -652,10 +652,14 @@ howlang/
     include/
       common.h                # Shared utilities: buffers, memory, error reporting, REPL state
       ast.h                   # AST node types and structures
+      sema.h                  # Semantic analysis / name-resolution pass API
       runtime.h               # Public runtime API
       lexer_internal.h        # Token types shared between lexer and parser (internal)
       runtime_internal.h      # Types, globals, and declarations shared across runtime, gc, builtins (internal)
     src/
+      compiler/
+        CMakeLists.txt         # Compiler-backend target definition
+        sema.c                # Semantic analysis pass: scope tracking, identifier resolution, call validation
       core/
         driver.c              # CLI entry point and REPL
         gc.c                  # GC state, value/env/map/list constructors, mark-sweep collector
@@ -688,6 +692,7 @@ howlang/
 ```bash
 cd c_interpreter
 cmake -S . -B build && cmake --build build
+./build/howlang --check ../samples/tests/test_all.how
 cd ..
 HOW=./c_interpreter/build/howlang
 

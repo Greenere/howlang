@@ -1,4 +1,7 @@
 #include "runtime.h"
+#include "compiler.h"
+#include "sema.h"
+#include "vm.h"
 #include <termios.h>
 
 /* ── REPL line editor with history (no readline dependency) ─────────────── */
@@ -279,7 +282,28 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    const char *script = argv[1];
+    int argi = 1;
+    int check_only = 0;
+    int disassemble_only = 0;
+    int compile_only = 0;
+    if (!strcmp(argv[argi], "--check")) {
+        check_only = 1;
+        argi++;
+    } else if (!strcmp(argv[argi], "--dis")) {
+        disassemble_only = 1;
+        argi++;
+    } else if (!strcmp(argv[argi], "--compile")) {
+        compile_only = 1;
+        argi++;
+    }
+
+    if (argi >= argc) {
+        fprintf(stderr, "usage: %s [--check|--dis|--compile] <script.how>\n", argv[0]);
+        how_runtime_shutdown();
+        return 1;
+    }
+
+    const char *script = argv[argi];
     char dir[4096];
     strncpy(dir, script, sizeof(dir)-1);
     dir[sizeof(dir)-1] = 0;
@@ -301,7 +325,43 @@ int main(int argc, char **argv) {
     source[sz] = 0;
     if (f != stdin) fclose(f);
 
-    how_run_source(script, source, globals);
+    if (check_only || disassemble_only || compile_only) {
+        how_set_source_context(script, source);
+        Node *prog = how_parse_source(source);
+        SemaCtx *sema = sema_new();
+        sema_resolve(prog, sema);
+        if (!sema_ok(sema)) {
+            sema_print_errors(stderr, sema);
+            sema_free(sema);
+            free(source);
+            how_runtime_shutdown();
+            return 1;
+        }
+        if (disassemble_only || compile_only) {
+            char *compile_error = NULL;
+            Proto *proto = how_compile(prog, sema, &compile_error);
+            if (!proto) {
+                fprintf(stderr, "%s\n", compile_error ? compile_error : "compile failed");
+                free(compile_error);
+                sema_free(sema);
+                free(source);
+                how_runtime_shutdown();
+                return 1;
+            }
+            if (disassemble_only) {
+                proto_disassemble(stdout, proto);
+            } else {
+                VM *vm = vm_new(globals);
+                Value *res = vm_run(vm, proto);
+                if (res) val_decref(res);
+                vm_free(vm);
+            }
+            proto_free(proto);
+        }
+        sema_free(sema);
+    } else {
+        how_run_source(script, source, globals);
+    }
     free(source);
     how_runtime_shutdown();
     return 0;

@@ -44,13 +44,17 @@ cmake --build build
 ```
 c_interpreter/
   CMakeLists.txt
-  include/
-    common.h            # Shared utilities: buffers, memory, error reporting, REPL state
-    ast.h               # AST node types and structures
-    runtime.h           # Public runtime API
-    lexer_internal.h    # Token types shared between lexer and parser (internal)
-    runtime_internal.h  # Types, globals, and declarations shared across runtime, gc, builtins (internal)
+    include/
+      common.h            # Shared utilities: buffers, memory, error reporting, REPL state
+      ast.h               # AST node types and structures
+      sema.h              # Semantic analysis / name-resolution pass API
+      runtime.h           # Public runtime API
+      lexer_internal.h    # Token types shared between lexer and parser (internal)
+      runtime_internal.h  # Types, globals, and declarations shared across runtime, gc, builtins (internal)
   src/
+    compiler/
+      CMakeLists.txt     # Compiler-backend target definition
+      sema.c            # Semantic analysis pass: scope tracking, identifier resolution, call validation
     core/
       driver.c          # CLI entry point and REPL
       gc.c              # GC state, value/env/map/list constructors, mark-sweep collector
@@ -75,6 +79,7 @@ c_interpreter/
 |-------------------------------|--------------------------|
 | `build/howlang`               | Interpreter executable   |
 | `build/libhowlang_frontend.a` | Parser static library    |
+| `build/src/compiler/libhowlang_compiler.a` | Compiler frontend/backend helpers |
 | `build/libhowlang_runtime.a`  | Runtime static library   |
 
 ## Running tests
@@ -83,6 +88,7 @@ From the repo root:
 
 ```bash
 ./c_interpreter/build/howlang samples/tests/test_all.how       # 54/54
+./c_interpreter/build/howlang --check samples/tests/test_all.how
 ./c_interpreter/build/howlang samples/tests/test_loops.how     # 41/41
 ./c_interpreter/build/howlang samples/tests/test_parallel.how  # 31/31
 ./c_interpreter/build/howlang samples/tests/test_named_args.how # 11/11
@@ -91,31 +97,4 @@ From the repo root:
 cd samples && ../c_interpreter/build/howlang tests/graph_test.how       # 32/32
 cd samples && ../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34
 cd samples && ../c_interpreter/build/howlang tests/brainfuck_test.how   # 32/32
-```
-
-## Parallel for-range
-
-Howlang supports a parallel variant of the for-range loop using `^`:
-
-```
-# Sequential
-var results = (i=0:n){ :: work(i) }()
-
-# Parallel — iterations run concurrently, result list preserves index order
-var results = (i=0:n)^{ :: work(i) }()
-```
-
-Semantics:
-- Iterations run on a thread pool sized to the number of logical CPUs
-- Each iteration gets its own local scope
-- Writing to a variable declared outside the loop is a runtime error
-- Reading outer variables is allowed
-- `::` results are collected into a list in original index order; returns `none` if no `::` in body
-- `break` is not allowed; `continue` works normally
-
-`par(lst, fn)` is syntactic sugar for the common map pattern:
-
-```
-var doubled = par({1, 2, 3}, (x){ :: x * 2 })
-# same as: (i=0:len(lst))^{ :: fn(lst(i)) }()
 ```

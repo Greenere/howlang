@@ -96,7 +96,7 @@ testable artifact before the next begins.
 
 ```
 c_interpreter/include/sema.h
-c_interpreter/src/core/sema.c
+c_interpreter/src/compiler/sema.c
 ```
 
 Add `sema` to `howlang_runtime` in CMakeLists.txt.
@@ -623,7 +623,7 @@ add_library(howlang_runtime STATIC
     src/runtime/ad.c
     src/runtime/import.c
     src/runtime/parallel.c
-    src/core/sema.c)             # ← Phase 1 addition
+    src/compiler/sema.c)         # ← Phase 1 addition
 
 add_library(howlang_compiler STATIC  # ← Phase 3 addition
     src/core/compiler.c
@@ -644,7 +644,7 @@ built and shipped without the compiler.
 
 | Phase | New files | Deliverable |
 |---|---|---|
-| 1 | `sema.h`, `core/sema.c` | Name resolution on the real AST (`N_IDENT`, `N_FORLOOP`, named calls, closure metadata) |
+| 1 | `sema.h`, `compiler/sema.c` | Name resolution on the real AST (`N_IDENT`, `N_FORLOOP`, named calls, closure metadata) |
 | 2 | `bytecode.h` | Defined instruction set, closure ABI, and compiled callable representation |
 | 3a | `core/compiler.c` | AST → bytecode for the core subset; `-S` disassembly |
 | 3b | `core/vm.c`, `vm.h` | Stack VM for the core subset; mixed-mode calls work |

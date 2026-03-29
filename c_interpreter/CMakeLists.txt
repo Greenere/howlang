@@ -14,6 +14,7 @@ add_library(howlang_frontend STATIC
     src/frontend/lexer.c
     src/frontend/parser.c
 )
+add_subdirectory(src/compiler)
 add_library(howlang_runtime STATIC
     src/core/runtime.c
     src/core/gc.c
@@ -25,5 +26,6 @@ add_library(howlang_runtime STATIC
     src/runtime/builtins.c
 )
 target_link_libraries(howlang_runtime PUBLIC howlang_frontend m Threads::Threads)
+target_link_libraries(howlang_compiler PUBLIC howlang_runtime)
 add_executable(howlang src/core/driver.c)
-target_link_libraries(howlang PRIVATE howlang_runtime howlang_frontend m Threads::Threads)
+target_link_libraries(howlang PRIVATE howlang_compiler howlang_runtime howlang_frontend m Threads::Threads)
