@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# test_map_builtin.how — tests for overloaded map()
+# ─────────────────────────────────────────────────────────────────────────────
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        passed = passed + 1,
+        print("  PASS  " + label)
+    },
+    got != expected: {
+        failed = failed + 1,
+        print("  FAIL  " + label + "  got=" + str(got) + "  expected=" + str(expected))
+    }
+}
+
+var assert_tensor_close = (label, got, expected, eps){
+    shape(got) != shape(expected): {
+        failed = failed + 1,
+        print("  FAIL  " + label + "  got_shape=" + str(shape(got)) + "  expected_shape=" + str(shape(expected)))
+    },
+    shape(got) == shape(expected): {
+        var dist = sum(abs(got - expected)),
+        dist <= eps: {
+            passed = passed + 1,
+            print("  PASS  " + label)
+        },
+        dist > eps: {
+            failed = failed + 1,
+            print("  FAIL  " + label + "  dist=" + str(dist) + "  eps=" + str(eps))
+        }
+    }
+}
+
+print("─── Constructor form ───────────────────────────────────────────────────")
+var empty = map()
+assert_eq("map() still constructs empty map", type(empty), "map")
+assert_eq("map() starts empty", len(empty), 0)
+
+print("─── List form ──────────────────────────────────────────────────────────")
+assert_eq("map(list, fn)", map({1, 2, 3}, (x){ :: x * x }), {1, 4, 9})
+
+print("─── Map / instance form ───────────────────────────────────────────────")
+var m = {"a": 1, "b": 2}
+var mapped_m = map(m, (x){ :: x + 10 })
+assert_eq("map(map, fn) preserves keys", mapped_m("a"), 11)
+assert_eq("map(map, fn) maps values", mapped_m("b"), 12)
+
+var Box = [x, y]{
+    x: x,
+    y: y
+}
+var mapped_box = map(Box[1, 2], (v){ :: v * 3 })
+assert_eq("map(instance, fn) returns map", type(mapped_box), "map")
+assert_eq("map(instance, fn) field x", mapped_box("x"), 3)
+assert_eq("map(instance, fn) field y", mapped_box("y"), 6)
+
+print("─── Tensor form ────────────────────────────────────────────────────────")
+var t1 = map(tensor({1, 2, 3}), (x){ :: x + 1 })
+assert_tensor_close("map(tensor, fn) 1d", t1, tensor({2, 3, 4}), 0.000001)
+var t2 = map(tensor({{1, 2}, {3, 4}}), (x){ :: x * 2 })
+assert_tensor_close("map(tensor, fn) 2d", t2, tensor({{2, 4}, {6, 8}}), 0.000001)
+
+print("─── String form ────────────────────────────────────────────────────────")
+assert_eq("map(string, fn) returns list", map("ab", (ch){ :: ch + "!" }), {"a!", "b!"})
+assert_eq("map(string utf8, fn)", map("🙂a", (ch){ :: len(ch) }), {4, 1})
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════")

@@ -47,9 +47,7 @@ var Layer = [W, b, act_s]{
     h:      list(),
     forward: (x){
         z = W @ x + b,
-        var out = list(),
-        (i=0:len(z)){ push(out, act_s(z(i))) }(),
-        h = tensor(out),
+        h = map(z, act_s),
         :: h
     },
     backward: (grad_h, x_in, lr){

@@ -1,3 +1,0 @@
-print("A", newline=false)
-print("B", end="")
-print("C")

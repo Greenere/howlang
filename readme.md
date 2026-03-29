@@ -384,6 +384,7 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `type(x)`               | Type name as string                                      |
 | `list()`                | Create an empty mutable list                             |
 | `map()`                 | Create an empty mutable map                              |
+| `map(coll, fn)`         | Apply `fn` to each element of a list/map/instance/tensor/string |
 | `tensor(data)`          | Create a tensor from a numeric list or nested list       |
 | `tensor(shape, data)`   | Create a tensor from a shape list and flat numeric data  |
 | `push(lst, v)`          | Append value to list (mutates in place)                  |

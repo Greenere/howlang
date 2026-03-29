@@ -262,6 +262,19 @@ Value  *eval_call_val(Value *callee, Value **args, const char **arg_names, int a
 void    exec_body(Node *body, Env *env, Signal *sig);
 void    exec_stmt(Node *node, Env *env, Signal *sig);
 
+/* ── Tensor helpers (defined in tensor.c) ───────────────────────────────── */
+
+Value  *tensor_binop(Value *l, Value *r, const char *op, int line);
+Value  *tensor_apply_augop(Value *old, Value *val, const char *op, int line);
+Value  *tensor_build_from_args(int argc, Value **argv);
+Value  *tensor_shape_value(Value *tensor_val);
+Value  *tensor_transpose_value(Value *tensor_val);
+Value  *tensor_outer_value(Value *a, Value *b);
+Value  *tensor_zeros_value(Value *shape_val);
+Value  *tensor_ones_value(Value *shape_val);
+Value  *tensor_eye_value(Value *n_val);
+Value  *tensor_sum_value(Value *tensor_val);
+
 /* ── Module import (defined in import.c) ────────────────────────────────── */
 
 char   *find_how_file(const char *name);

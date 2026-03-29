@@ -11,7 +11,11 @@ on:
         required: true
 
 jobs:
+  tests:
+    uses: ./.github/workflows/release_tests.yml
+
   build:
+    needs: tests
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -34,18 +38,6 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-
-      - name: Test
-        run: |
-          HOW=./c_interpreter/build/howlang
-          $HOW samples/tests/test_all.how
-          $HOW samples/tests/test_loops.how
-          $HOW samples/tests/test_parallel.how
-          $HOW samples/tests/test_grad.how
-          $HOW samples/tests/test_tensor.how
-          $HOW samples/tests/test_try_catch.how
-          $HOW samples/tests/test_functional.how
-          $HOW samples/tests/test_named_args.how
 
       - name: Rename artifact
         run: cp c_interpreter/build/howlang ${{ matrix.artifact }}

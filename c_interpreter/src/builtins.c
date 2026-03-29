@@ -30,6 +30,23 @@ static void write_value_to_path(const char *path, Value *v) {
     fclose(f);
 }
 
+static Value *call_map_callback(Value *fn, Value *item) {
+    Signal sig = {SIG_NONE, NULL};
+    Value *res = eval_call_val(fn, &item, NULL, 1, &sig, 0);
+    if (sig.type == SIG_ERROR) {
+        char *s = sig.retval ? val_repr(sig.retval) : xstrdup("unknown error");
+        if (sig.retval) val_decref(sig.retval);
+        if (res) val_decref(res);
+        die("map(): callback error: %s", s);
+    }
+    if (sig.type == SIG_RETURN && sig.retval) {
+        if (res) val_decref(res);
+        res = sig.retval;
+        sig.retval = NULL;
+    }
+    return res;
+}
+
 /* ── Built-in function implementations ──────────────────────────────────── */
 
 BUILTIN(print) {
@@ -230,9 +247,76 @@ BUILTIN(list_fn) {
 }
 
 BUILTIN(map_fn) {
-    UNUSED(argc); UNUSED(argv);
-    HowMap *m = map_new();
-    Value *v = val_map(m); map_decref(m); return v;
+    if (argc == 0) {
+        HowMap *m = map_new();
+        Value *v = val_map(m); map_decref(m); return v;
+    }
+
+    if (argc != 2) die("map() requires 0 or 2 arguments");
+
+    Value *src = ARG(0);
+    Value *fn  = ARG(1);
+
+    if (src->type == VT_LIST) {
+        HowList *out = list_new();
+        for (int i = 0; i < src->list->len; i++) {
+            Value *mapped = call_map_callback(fn, src->list->items[i]);
+            list_push(out, mapped);
+            val_decref(mapped);
+        }
+        Value *v = val_list(out); list_decref(out); return v;
+    }
+
+    if (src->type == VT_MAP || src->type == VT_INSTANCE) {
+        HowMap *in = src->type == VT_MAP ? src->map : src->inst->fields;
+        HowMap *out = map_new();
+        for (int i = 0; i < in->len; i++) {
+            Value *mapped = call_map_callback(fn, in->pairs[i].val);
+            map_set(out, in->pairs[i].key, mapped);
+            val_decref(mapped);
+        }
+        Value *v = val_map(out); map_decref(out); return v;
+    }
+
+    if (src->type == VT_TENSOR) {
+        HowTensor *t = src->tensor;
+        HowTensor *out = tensor_new(t->ndim, t->shape);
+        for (int i = 0; i < t->nelem; i++) {
+            Value *item = val_num(t->data[i]);
+            Value *mapped = call_map_callback(fn, item);
+            val_decref(item);
+            if (mapped->type != VT_NUM) {
+                val_decref(mapped);
+                die("map(tensor, fn) requires fn to return numbers");
+            }
+            out->data[i] = mapped->nval;
+            val_decref(mapped);
+        }
+        return val_tensor(out);
+    }
+
+    if (src->type == VT_STR) {
+        HowList *out = list_new();
+        const char *p = src->sval;
+        while (*p) {
+            int codepoint = 0, nbytes = 0;
+            char ch[5];
+            if (!how_utf8_decode_one(p, &codepoint, &nbytes))
+                die("map(string, fn): invalid UTF-8");
+            memcpy(ch, p, (size_t)nbytes);
+            ch[nbytes] = '\0';
+            Value *item = val_str(ch);
+            Value *mapped = call_map_callback(fn, item);
+            val_decref(item);
+            list_push(out, mapped);
+            val_decref(mapped);
+            p += nbytes;
+        }
+        Value *v = val_list(out); list_decref(out); return v;
+    }
+
+    die("map() requires a list, map, instance, tensor, or string as first argument");
+    return val_none();
 }
 
 BUILTIN(push_fn) {
@@ -720,147 +804,43 @@ BUILTIN(par_fn) {
 /* ── Tensor builtins ─────────────────────────────────────────────────────── */
 
 BUILTIN(tensor_fn) {
-    if (argc == 0) die("tensor() requires at least 1 argument");
-    if (argc == 1) {
-        Value *arg = ARG(0);
-        if (arg->type == VT_LIST) {
-            HowList *outer = arg->list;
-            if (outer->len == 0) {
-                int shape[] = {0};
-                HowTensor *t = tensor_new(1, shape);
-                return val_tensor(t);
-            }
-            if (outer->items[0]->type == VT_LIST) {
-                int rows = outer->len;
-                int cols = outer->items[0]->list->len;
-                int shape[] = {rows, cols};
-                HowTensor *t = tensor_new(2, shape);
-                for (int i = 0; i < rows; i++) {
-                    HowList *row = outer->items[i]->list;
-                    if (row->len != cols) die("tensor(): all rows must have the same length");
-                    for (int j = 0; j < cols; j++) {
-                        if (row->items[j]->type != VT_NUM) die("tensor(): all elements must be numbers");
-                        t->data[i*cols + j] = row->items[j]->nval;
-                    }
-                }
-                return val_tensor(t);
-            }
-            int shape[] = {outer->len};
-            HowTensor *t = tensor_new(1, shape);
-            for (int i = 0; i < outer->len; i++) {
-                if (outer->items[i]->type != VT_NUM) die("tensor(): all elements must be numbers");
-                t->data[i] = outer->items[i]->nval;
-            }
-            return val_tensor(t);
-        }
-        die("tensor() requires a list argument");
-    }
-    if (argc == 2) {
-        if (ARG(0)->type != VT_LIST) die("tensor(): first arg must be shape list");
-        if (ARG(1)->type != VT_LIST) die("tensor(): second arg must be data list");
-        HowList *shape_list = ARG(0)->list;
-        HowList *data_list  = ARG(1)->list;
-        int ndim = shape_list->len;
-        int *shape = xmalloc(ndim * sizeof(int));
-        for (int i = 0; i < ndim; i++) shape[i] = (int)shape_list->items[i]->nval;
-        HowTensor *t = tensor_new(ndim, shape);
-        free(shape);
-        if (data_list->len != t->nelem)
-            die("tensor(): data length %d doesn't match shape (expected %d)", data_list->len, t->nelem);
-        for (int i = 0; i < t->nelem; i++) {
-            if (data_list->items[i]->type != VT_NUM) die("tensor(): all data elements must be numbers");
-            t->data[i] = data_list->items[i]->nval;
-        }
-        return val_tensor(t);
-    }
-    die("tensor() takes 1 or 2 arguments");
-    return val_none();
+    return tensor_build_from_args(argc, argv);
 }
 
 BUILTIN(shape_fn) {
     NEED(1);
-    if (ARG(0)->type != VT_TENSOR) die("shape() requires a tensor");
-    HowTensor *t = ARG(0)->tensor;
-    HowList *l = list_new();
-    for (int i = 0; i < t->ndim; i++) {
-        Value *v = val_num(t->shape[i]);
-        list_push(l, v); val_decref(v);
-    }
-    Value *v = val_list(l); list_decref(l); return v;
+    return tensor_shape_value(ARG(0));
 }
 
 BUILTIN(transpose_fn) {
     NEED(1);
-    if (ARG(0)->type != VT_TENSOR) die("T() requires a tensor");
-    HowTensor *t = ARG(0)->tensor;
-    if (t->ndim < 2) die("T() requires a tensor with at least 2 dimensions");
-    int m = t->shape[0], n = t->shape[1];
-    int out_shape[] = {n, m};
-    HowTensor *out = tensor_new(2, out_shape);
-    for (int i = 0; i < m; i++)
-        for (int j = 0; j < n; j++)
-            out->data[j*m + i] = t->data[i*t->strides[0] + j*t->strides[1]];
-    return val_tensor(out);
+    return tensor_transpose_value(ARG(0));
 }
 
 BUILTIN(outer_fn) {
     NEED(2);
-    if (ARG(0)->type != VT_TENSOR || ARG(1)->type != VT_TENSOR)
-        die("outer() requires two tensors");
-    HowTensor *a = ARG(0)->tensor, *b = ARG(1)->tensor;
-    if (a->ndim != 1 || b->ndim != 1) die("outer() requires 1D tensors");
-    int shape[] = {a->nelem, b->nelem};
-    HowTensor *out = tensor_new(2, shape);
-    for (int i = 0; i < a->nelem; i++)
-        for (int j = 0; j < b->nelem; j++)
-            out->data[i * b->nelem + j] = a->data[i * a->strides[0]] * b->data[j * b->strides[0]];
-    return val_tensor(out);
+    return tensor_outer_value(ARG(0), ARG(1));
 }
 
 BUILTIN(zeros_fn) {
     NEED(1);
-    if (ARG(0)->type != VT_LIST) die("zeros() requires a shape list");
-    HowList *sl = ARG(0)->list;
-    int ndim = sl->len;
-    int *shape = xmalloc(ndim * sizeof(int));
-    for (int i = 0; i < ndim; i++) shape[i] = (int)sl->items[i]->nval;
-    HowTensor *t = tensor_new(ndim, shape);
-    free(shape);
-    memset(t->data, 0, t->nelem * sizeof(double));
-    return val_tensor(t);
+    return tensor_zeros_value(ARG(0));
 }
 
 BUILTIN(ones_fn) {
     NEED(1);
-    if (ARG(0)->type != VT_LIST) die("ones() requires a shape list");
-    HowList *sl = ARG(0)->list;
-    int ndim = sl->len;
-    int *shape = xmalloc(ndim * sizeof(int));
-    for (int i = 0; i < ndim; i++) shape[i] = (int)sl->items[i]->nval;
-    HowTensor *t = tensor_new(ndim, shape);
-    free(shape);
-    for (int i = 0; i < t->nelem; i++) t->data[i] = 1.0;
-    return val_tensor(t);
+    return tensor_ones_value(ARG(0));
 }
 
 BUILTIN(eye_fn) {
     NEED(1);
-    if (ARG(0)->type != VT_NUM) die("eye() requires a number");
-    int n = (int)ARG(0)->nval;
-    int shape[] = {n, n};
-    HowTensor *t = tensor_new(2, shape);
-    memset(t->data, 0, t->nelem * sizeof(double));
-    for (int i = 0; i < n; i++) t->data[i*n + i] = 1.0;
-    return val_tensor(t);
+    return tensor_eye_value(ARG(0));
 }
 
 BUILTIN(sum_fn) {
     NEED(1);
     if (ARG(0)->type == VT_TENSOR) {
-        double s = 0;
-        HowTensor *t = ARG(0)->tensor;
-        for (int i = 0; i < t->nelem; i++) s += t->data[i];
-        return val_num(s);
+        return tensor_sum_value(ARG(0));
     }
     if (ARG(0)->type == VT_LIST) {
         HowList *lst = ARG(0)->list;

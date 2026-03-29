@@ -168,9 +168,7 @@ var Dense = [W, b]{
 
     forward: (x){
         z = W @ x + b,
-        var out = list()
-        (i=0:len(z)){ push(out, sigmoid_s(z(i))) }()
-        h = tensor(out),
+        h = map(z, sigmoid_s),
         :: h
     },
 

@@ -1,0 +1,41 @@
+name: Release Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y cmake
+
+      - name: Build
+        working-directory: c_interpreter
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Run release test suite
+        run: |
+          HOW=./c_interpreter/build/howlang
+          $HOW samples/tests/test_all.how
+          $HOW samples/tests/test_loops.how
+          $HOW samples/tests/test_parallel.how
+          $HOW samples/tests/test_grad.how
+          $HOW samples/tests/test_tensor.how
+          $HOW samples/tests/test_try_catch.how
+          $HOW samples/tests/test_functional.how
+          $HOW samples/tests/test_named_args.how
+          $HOW samples/tests/test_map_builtin.how
