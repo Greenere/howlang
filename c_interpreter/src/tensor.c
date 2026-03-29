@@ -9,7 +9,8 @@
  *   tensor_binop(), tensor_apply_augop()
  *   tensor_build_from_args(), tensor_shape_value(), tensor_transpose_value()
  *   tensor_outer_value(), tensor_zeros_value(), tensor_ones_value()
- *   tensor_eye_value(), tensor_sum_value()
+ *   tensor_eye_value(), tensor_sum_value(), tensor_max_value(),
+ *   tensor_min_value()
  */
 #include "runtime_internal.h"
 
@@ -323,4 +324,24 @@ Value *tensor_sum_value(Value *tensor_val) {
     HowTensor *t = tensor_val->tensor;
     for (int i = 0; i < t->nelem; i++) s += t->data[i];
     return val_num(s);
+}
+
+Value *tensor_max_value(Value *tensor_val) {
+    if (tensor_val->type != VT_TENSOR) die("max() requires a tensor");
+    HowTensor *t = tensor_val->tensor;
+    if (t->nelem == 0) return val_none();
+    double best = t->data[0];
+    for (int i = 1; i < t->nelem; i++)
+        if (t->data[i] > best) best = t->data[i];
+    return val_num(best);
+}
+
+Value *tensor_min_value(Value *tensor_val) {
+    if (tensor_val->type != VT_TENSOR) die("min() requires a tensor");
+    HowTensor *t = tensor_val->tensor;
+    if (t->nelem == 0) return val_none();
+    double best = t->data[0];
+    for (int i = 1; i < t->nelem; i++)
+        if (t->data[i] < best) best = t->data[i];
+    return val_num(best);
 }

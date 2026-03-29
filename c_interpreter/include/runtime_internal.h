@@ -274,6 +274,8 @@ Value  *tensor_zeros_value(Value *shape_val);
 Value  *tensor_ones_value(Value *shape_val);
 Value  *tensor_eye_value(Value *n_val);
 Value  *tensor_sum_value(Value *tensor_val);
+Value  *tensor_max_value(Value *tensor_val);
+Value  *tensor_min_value(Value *tensor_val);
 
 /* ── Module import (defined in import.c) ────────────────────────────────── */
 

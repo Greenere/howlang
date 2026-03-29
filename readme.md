@@ -402,17 +402,17 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `ones(shape)`           | One-filled tensor with the given shape                   |
 | `eye(n)`                | `n × n` identity tensor                                  |
 | `sum(x)`                | Sum of a list or tensor                                  |
-| `abs(n)`                | Absolute value; element-wise for tensors                 |
+| `abs(n)`                | Absolute value                                           |
 | `floor(n)`              | Floor                                                    |
 | `ceil(n)`               | Ceiling                                                  |
-| `sqrt(n)`               | Square root; element-wise for tensors                    |
+| `sqrt(n)`               | Square root                                              |
 | `sin(n)`                | Sine (radians)                                           |
 | `cos(n)`                | Cosine (radians)                                         |
 | `exp(n)`                | Natural exponential eⁿ                                   |
 | `log(n)`                | Natural logarithm ln(n)                                  |
 | `pow(base, exp)`        | Power: baseᵉˣᵖ                                           |
 | `pi`                    | The constant π ≈ 3.14159… (a value, not a function)      |
-| `max(...)` / `min(...)` | Max/min of args or a single list; broadcasts over tensors |
+| `max(...)` / `min(...)` | Max/min of args, or reduction over a single list or tensor |
 | `ask(prompt)`           | Print prompt and read a line from stdin                  |
 | `read(path)`            | Read entire file as a string                             |
 | `write(path, v)`        | Write value to file (strings written raw, others repr'd) |

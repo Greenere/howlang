@@ -68,24 +68,16 @@ var fft = (x){
 
 var ifft = (x){
     var n = len(x)
-    # conjugate input
-    var xc = list()
-    (k=0:n){ push(xc, cconj(x(k))) }()
-    # forward FFT
+    var xc = map(x, cconj)
     var F = fft(xc)
-    # conjugate output and scale by 1/N
-    var out = list()
-    (k=0:n){ push(out, cscale(cconj(F(k)), 1.0/n)) }()
-    :: out
+    :: map(F, (z){ :: cscale(cconj(z), 1.0 / n) })
 }
 
 
 # ── Convenience: real → complex → FFT ────────────────────────────────────
 
 var fft_real = (r){
-    var x = list()
-    (k=0:len(r)){ push(x, {r(k), 0}) }()
-    :: fft(x)
+    :: fft(map(range(len(r)), (k){ :: {r(k), 0} }))
 }
 
 
@@ -144,7 +136,7 @@ var N  = 8
 var k0 = 2   # target frequency bin
 
 var x_cos = list()
-(n=0:N){ push(x_cos, {cos(2 * pi * k0 * n / N), 0}) }()
+var x_cos = map(range(N), (n){ :: {cos(2 * pi * k0 * n / N), 0} })
 
 var X = fft(x_cos)
 
@@ -157,21 +149,17 @@ print("")
 
 # 2. Round-trip: signal → FFT → IFFT → signal
 print("Round-trip test  (FFT then IFFT should recover original):")
-var signal = {3, -1, 4, 1, 5, -9, 2, 6}
+var signal = tensor({3, -1, 4, 1, 5, -9, 2, 6})
 var S = fft_real(signal)
 var s_back = ifft(S)
-var max_err = 0
-(k=0:N){
-    var err = abs(s_back(k)(0) - signal(k))
-    max_err > err :: none, :: max_err = err
-}()
+var max_err = max(map(range(N), (k){ :: abs(s_back(k)(0) - signal(k)) }))
 print("  max reconstruction error = " + str(max_err))
 print("")
 
 # 3. Linear convolution via FFT vs direct convolution
 print("Convolution via FFT:")
-var a_sig = {1, 2, 3}
-var b_sig = {1, -1, 1}
+var a_sig = tensor({1, 2, 3})
+var b_sig = tensor({1, -1, 1})
 var c_fft = conv_fft(a_sig, b_sig)
 
 # Direct O(N·M) for verification
@@ -187,11 +175,7 @@ print("  a = " + str(a_sig))
 print("  b = " + str(b_sig))
 print("  conv_fft    = " + str(c_fft))
 print("  conv_direct = " + str(c_direct))
-var conv_err = 0
-(k=0:len(c_fft)){
-    var e = abs(c_fft(k) - c_direct(k))
-    conv_err > e :: none, :: conv_err = e
-}()
+var conv_err = max(map(range(len(c_fft)), (k){ :: abs(c_fft(k) - c_direct(k)) }))
 print("  max error = " + str(conv_err))
 print("")
 print("Done.")

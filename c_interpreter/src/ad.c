@@ -294,15 +294,20 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
     val_decref(grad_args[n]);
     free(grad_args);
 
-    /* Custom grad blocks must return a keyed map of parameter overrides. */
+    /* Custom grad blocks may return either:
+     *   - a keyed map of parameter overrides, or
+     *   - a bare value for the first parameter (common single-arg shorthand).
+     */
     if (override_map && override_map->type != VT_MAP) {
-        Value *bad = override_map;
-        char *got = val_repr(bad);
-        val_decref(bad);
-        free(primals);
-        free(arg_ids);
-        die_at(line, 0, "grad block must return a keyed map, got %s", got);
-        free(got);
+        if (n != 1 || primal_fn->params.len < 1) {
+            Value *bad = override_map;
+            char *got = val_repr(bad);
+            val_decref(bad);
+            free(primals);
+            free(arg_ids);
+            die_at(line, 0, "grad block must return a keyed map, got %s", got);
+            free(got);
+        }
     }
 
     /* Build result map: override wins; tape fills omitted numeric params */
@@ -312,7 +317,11 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
 
     for (int i = 0; i < n && i < primal_fn->params.len; i++) {
         const char *pname = primal_fn->params.s[i];
-        Value *override = override_map ? map_get(override_map->map, pname) : NULL;
+        Value *override = NULL;
+        if (override_map) {
+            if (override_map->type == VT_MAP) override = map_get(override_map->map, pname);
+            else if (i == 0) override = override_map;
+        }
 
         Value *gv;
         if (override && override->type != VT_NONE) {

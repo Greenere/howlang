@@ -184,23 +184,22 @@ assert_eq("sum 1D", sum(tensor({1.0, 2.0, 3.0})), 6.0)
 assert_eq("sum 2D", sum(eye(3)), 3.0)
 assert_eq("sum list", sum({1, 2, 3, 4}), 10)
 
-# ─── 10. max() for relu ──────────────────────────────────────────────────────
+# ─── 10. max() / min() reductions ───────────────────────────────────────────
 
-print("─── 10. max / relu")
+print("─── 10. max / min")
 
 var z = tensor({-1.0, 0.5, -0.3, 2.0})
-var h = max(0, z)
-assert_eq("relu neg",   h(0), 0.0)
-assert_eq("relu pos",   h(1), 0.5)
-assert_eq("relu neg2",  h(2), 0.0)
-assert_eq("relu big",   h(3), 2.0)
+assert_eq("max tensor", max(z), 2.0)
+assert_eq("min tensor", min(z), -1.0)
+assert_eq("max list",   max({3, 1, 9, 2}), 9)
+assert_eq("min list",   min({3, 1, 9, 2}), 1)
 
-# ─── 11. abs() on tensor ─────────────────────────────────────────────────────
+# ─── 11. map(..., abs) for element-wise scalar math ─────────────────────────
 
-print("─── 11. abs()")
+print("─── 11. map(..., abs)")
 
 var neg = tensor({-3.0, -1.0, 2.0})
-var pos = abs(neg)
+var pos = map(neg, abs)
 assert_eq("abs [0]", pos(0), 3.0)
 assert_eq("abs [1]", pos(1), 1.0)
 assert_eq("abs [2]", pos(2), 2.0)

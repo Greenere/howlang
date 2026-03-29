@@ -113,7 +113,7 @@ var ReLUMaps = []{
 
     forward: (maps){
         z_saved = maps,
-        :: max(0, maps)
+        :: map(maps, relu_s)
     },
 
     backward: (grad_out){

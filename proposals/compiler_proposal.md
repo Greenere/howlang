@@ -426,6 +426,84 @@ closures (`make_adder`, `memoize`, etc.) without changing the value system.
 
 ---
 
+## Builtin semantics cleanup worth doing alongside the VM
+
+This is slightly adjacent to the compiler work, but it is worth writing down now
+because the VM will be much easier to reason about if builtin dispatch follows a
+small number of consistent rules.
+
+Today the builtin surface is a little mixed:
+
+- `map(coll, fn)` is explicitly element-wise
+- `sum(x)` is a reduction for lists/tensors
+- `abs(x)` is scalar for numbers but also element-wise for tensors
+- `max(...)` is scalar for plain args, reduction for `max(list)`, and also has a
+  special `max(number, tensor)` clamp path used by ReLU-like code
+
+That works, but it spreads "collection awareness" across otherwise unrelated
+builtins and makes the language harder to predict.
+
+### Recommended rule
+
+Use three semantic buckets and keep them distinct:
+
+1. **Scalar transforms**
+   `abs`, `sqrt`, `sin`, `cos`, `exp`, `log`, `pow`, `floor`, `ceil`
+
+   These should mean "operate on one numeric value" (or dual number for AD).
+   If the user wants element-wise collection behavior, they should write it
+   explicitly via `map(coll, fn)`.
+
+2. **Reductions**
+   `sum`, `max`, `min`
+
+   These may accept a collection and reduce it to one value, because that is a
+   standard aggregate meaning rather than implicit broadcasting.
+
+3. **Collection transforms / tensor primitives**
+   `map`, `par`, `tensor`, `shape`, `T`, `outer`, `zeros`, `ones`, `eye`
+
+   These are explicitly collection-oriented and can stay that way without
+   ambiguity.
+
+### Concrete recommendation for the current surface
+
+- Make `abs` scalar-only in the long run
+- Keep `sum` as a list/tensor reduction
+- Keep `max` / `min` as:
+  - scalar comparison for multiple args
+  - reduction for a single list or tensor
+- Do **not** keep special implicit broadcast forms like `max(number, tensor)`
+  long-term; the element-wise version should be written as `map(t, (x){ :: max(c, x) })`
+  or replaced by a dedicated domain helper such as `relu`
+
+This gives a cleaner mental model:
+
+- `map` is for element-wise transformation
+- `sum` / `max` / `min` are reductions
+- math builtins stay scalar unless they have a very standard aggregate meaning
+
+### Why this helps the compiler too
+
+This policy is not just aesthetic. It reduces the number of ad hoc builtin
+shapes the compiler/VM may eventually want to special-case:
+
+- scalar builtins remain ordinary calls
+- reducers are easy to recognize semantically
+- explicit element-wise operations stay explicit in the AST as `map(...)`
+
+That keeps both interpreter and VM behavior easier to document, optimize, and
+test.
+
+### Migration note
+
+This should be treated as a **semantic cleanup pass**, not as a requirement for
+Phase 3. The VM can preserve current behavior first. Once the backend is stable,
+we can tighten the builtin surface deliberately and update samples/tests in one
+focused change.
+
+---
+
 ## What does NOT change semantically
 
 - `howlang_frontend` — zero changes

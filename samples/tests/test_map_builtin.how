@@ -22,7 +22,7 @@ var assert_tensor_close = (label, got, expected, eps){
         print("  FAIL  " + label + "  got_shape=" + str(shape(got)) + "  expected_shape=" + str(shape(expected)))
     },
     shape(got) == shape(expected): {
-        var dist = sum(abs(got - expected)),
+        var dist = sum(map(got - expected, abs)),
         dist <= eps: {
             passed = passed + 1,
             print("  PASS  " + label)

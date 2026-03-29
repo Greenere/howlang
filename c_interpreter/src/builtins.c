@@ -172,12 +172,6 @@ BUILTIN(abs_fn) {
         double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
         return val_dual(fabs(v), v>=0.0 ? t : -t);
     }
-    if (ARG(0)->type == VT_TENSOR) {
-        HowTensor *t = ARG(0)->tensor;
-        HowTensor *out = tensor_new(t->ndim, t->shape);
-        for (int i = 0; i < t->nelem; i++) out->data[i] = fabs(t->data[i]);
-        return val_tensor(out);
-    }
     return val_num(fabs(ARG(0)->nval));
 }
 BUILTIN(sqrt_fn) {
@@ -567,14 +561,8 @@ BUILTIN(push_import_dir_fn) {
 }
 
 BUILTIN(max_fn) {
-    /* max(threshold, tensor) — element-wise clamp, used for relu */
-    if (argc == 2 && ARG(0)->type == VT_NUM && ARG(1)->type == VT_TENSOR) {
-        double threshold = ARG(0)->nval;
-        HowTensor *t = ARG(1)->tensor;
-        HowTensor *out = tensor_new(t->ndim, t->shape);
-        for (int i = 0; i < t->nelem; i++)
-            out->data[i] = t->data[i] > threshold ? t->data[i] : threshold;
-        return val_tensor(out);
+    if (argc==1 && ARG(0)->type==VT_TENSOR) {
+        return tensor_max_value(ARG(0));
     }
     if (argc==1 && ARG(0)->type==VT_LIST) {
         HowList *l = ARG(0)->list;
@@ -592,6 +580,9 @@ BUILTIN(max_fn) {
 }
 
 BUILTIN(min_fn) {
+    if (argc==1 && ARG(0)->type==VT_TENSOR) {
+        return tensor_min_value(ARG(0));
+    }
     if (argc==1 && ARG(0)->type==VT_LIST) {
         HowList *l = ARG(0)->list;
         if (!l->len) return val_none();
