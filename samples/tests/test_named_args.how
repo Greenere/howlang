@@ -46,9 +46,24 @@ assert_eq("chr unicode", chr(128578), "🙂")
 
 print("─── print named args ─────────────────────────────────────────────────")
 
-var print_cmd = "cd " + tests_dir + " && ../../c_interpreter/build/howlang test_named_args_print_fixture.how > test_named_args_print.out"
+var print_fixture_path = tests_dir + "test_named_args_print_fixture_tmp.how"
+write(print_fixture_path,
+    "print(\"A\", newline=false)\n"
+    + "print(\"B\", end=\"\")\n"
+    + "print(\"C\")\n"
+)
+var print_cmd = "cd " + tests_dir + " && ../../c_interpreter/build/howlang test_named_args_print_fixture_tmp.how > test_named_args_print.out"
 assert_eq("fixture command exits cleanly", run(print_cmd), 0)
 assert_eq("print newline/end control", read(tests_dir + "test_named_args_print.out"), "ABC\n")
+
+print("─── read / write bytes named args ────────────────────────────────────")
+
+var bytes_path = tests_dir + "test_bytes.bin"
+var payload = {82, 73, 70, 70, 0, 255, 65}
+write(bytes_path, payload, bytes=true)
+assert_eq("read bytes round trip", read(bytes_path, bytes=true), payload)
+assert_eq("write text still works", write(tests_dir + "test_bytes.txt", "ok"), "ok")
+assert_eq("read text default", read(tests_dir + "test_bytes.txt"), "ok")
 
 print("")
 print("═════════════════════════════════════════════════")

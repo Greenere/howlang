@@ -30,6 +30,50 @@ static void write_value_to_path(const char *path, Value *v) {
     fclose(f);
 }
 
+static void write_bytes_to_path(const char *path, Value *v) {
+    FILE *f = fopen(path, "wb");
+    if (!f) die("write(bytes=true): cannot open '%s' for writing: %s", path, strerror(errno));
+    if (v->type == VT_STR) {
+        size_t n = strlen(v->sval);
+        if (fwrite(v->sval, 1, n, f) < n) {
+            fclose(f);
+            die("write(bytes=true): failed writing '%s'", path);
+        }
+        fclose(f);
+        return;
+    }
+    if (v->type != VT_LIST) {
+        fclose(f);
+        die("write(bytes=true) requires a list of byte values or a string");
+    }
+    for (int i = 0; i < v->list->len; i++) {
+        Value *item = v->list->items[i];
+        int byte;
+        if (item->type != VT_NUM) {
+            fclose(f);
+            die("write(bytes=true): item %d is not numeric", i);
+        }
+        byte = (int)item->nval;
+        if (item->nval != (double)byte || byte < 0 || byte > 255) {
+            fclose(f);
+            die("write(bytes=true): item %d is not a byte value", i);
+        }
+        if (fputc(byte, f) == EOF) {
+            fclose(f);
+            die("write(bytes=true): failed writing '%s'", path);
+        }
+    }
+    fclose(f);
+}
+
+static int named_bool_arg(const char *fn_name, const char *expected, Value *v, const char *arg_name) {
+    if (strcmp(arg_name, expected))
+        die("%s() got an unexpected named argument '%s'", fn_name, arg_name);
+    if (v->type != VT_BOOL)
+        die("%s(%s=...) requires a bool", fn_name, expected);
+    return v->bval;
+}
+
 static Value *call_map_callback(Value *fn, Value *item) {
     Signal sig = {SIG_NONE, NULL};
     Value *res = eval_call_val(fn, &item, NULL, 1, &sig, 0);
@@ -558,20 +602,58 @@ BUILTIN(ask_fn) {
 }
 
 BUILTIN(read_fn) {
+    int read_bytes = 0;
+
     NEED(1);
     if (ARG(0)->type!=VT_STR) die("read() requires a string path");
-    FILE *f = fopen(ARG(0)->sval,"r");
+    for (int i = 1; i < argc; i++) {
+        if (!arg_names || !arg_names[i]) die("read() only supports path as a positional argument");
+        if (!strcmp(arg_names[i], "bytes")) {
+            read_bytes = named_bool_arg("read", "bytes", argv[i], arg_names[i]);
+            continue;
+        }
+        die("read() got an unexpected named argument '%s'", arg_names[i]);
+    }
+
+    FILE *f = fopen(ARG(0)->sval, read_bytes ? "rb" : "r");
     if (!f) die("read(): cannot open '%s': %s", ARG(0)->sval, strerror(errno));
     fseek(f,0,SEEK_END); long sz=ftell(f); rewind(f);
+    if (read_bytes) {
+        HowList *out = list_new();
+        for (long i = 0; i < sz; i++) {
+            int ch = fgetc(f);
+            if (ch == EOF) {
+                fclose(f);
+                list_decref(out);
+                die("read(bytes=true): failed reading '%s'", ARG(0)->sval);
+            }
+            list_push(out, val_num((double)ch));
+        }
+        fclose(f);
+        Value *ret = val_list(out);
+        list_decref(out);
+        return ret;
+    }
     char *buf = xmalloc(sz+1);
     fread(buf,1,sz,f); buf[sz]=0; fclose(f);
     return val_str_own(buf);
 }
 
 BUILTIN(write_fn) {
+    int write_bytes = 0;
+
     NEED(2);
     if (ARG(0)->type!=VT_STR) die("write() requires a string path as first argument");
-    write_value_to_path(ARG(0)->sval, ARG(1));
+    for (int i = 2; i < argc; i++) {
+        if (!arg_names || !arg_names[i]) die("write() only supports path and value as positional arguments");
+        if (!strcmp(arg_names[i], "bytes")) {
+            write_bytes = named_bool_arg("write", "bytes", argv[i], arg_names[i]);
+            continue;
+        }
+        die("write() got an unexpected named argument '%s'", arg_names[i]);
+    }
+    if (write_bytes) write_bytes_to_path(ARG(0)->sval, ARG(1));
+    else write_value_to_path(ARG(0)->sval, ARG(1));
     return val_incref(ARG(1));
 }
 

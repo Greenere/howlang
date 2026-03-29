@@ -1,0 +1,138 @@
+# way_synth.how — tiny WAV synthesizer in Howlang
+#
+# This writes a real 16-bit PCM mono .wav file using write(bytes=true).
+
+
+var clamp = (x, lo, hi){
+    x < lo :: lo,
+    x > hi :: hi,
+    :: x
+}
+
+var append_byte = (out, n){
+    push(out, n % 256)
+}
+
+var append_le16 = (out, n){
+    append_byte(out, n)
+    append_byte(out, floor(n / 256))
+}
+
+var append_le32 = (out, n){
+    append_byte(out, n)
+    append_byte(out, floor(n / 256))
+    append_byte(out, floor(n / 65536))
+    append_byte(out, floor(n / 16777216))
+}
+
+var append_ascii = (out, s){
+    (i=0:len(s)){ push(out, ord(s(i:i+1))) }()
+}
+
+var note_freq = (semi){
+    :: 440.0 * pow(2, semi / 12.0)
+}
+
+var sine_note = (freq, t){
+    :: sin(2 * pi * freq * t)
+}
+
+var envelope = (local_t, dur){
+    var attack = 0.02
+    var release = 0.05
+    local_t < attack :: local_t / attack,
+    local_t > dur - release :: (dur - local_t) / release,
+    :: 1.0
+}
+
+var melody_freq = (t){
+    var dur = 0.25
+    var notes = {-9, -7, -5, -4, -2, 0, 2, 3}
+    var idx = floor(t / dur)
+    idx >= len(notes) :: 0.0,
+    :: note_freq(notes(idx))
+}
+
+var bass_freq = (t){
+    var dur = 0.5
+    var notes = {-21, -14, -17, -12}
+    var idx = floor(t / dur)
+    idx >= len(notes) :: 0.0,
+    :: note_freq(notes(idx))
+}
+
+var sample_at = (t){
+    var m = melody_freq(t)
+    var b = bass_freq(t)
+    var mel_local = t % 0.25
+    var bass_local = t % 0.5
+    var mel = 0.0
+    var bas = 0.0
+    m != 0.0: mel = 0.45 * sine_note(m, t) * envelope(mel_local, 0.25)
+    b != 0.0: bas = 0.25 * sine_note(b, t) * envelope(bass_local, 0.5)
+    :: clamp(mel + bas, -1.0, 1.0)
+}
+
+var waveform_bar = (x){
+    var n = floor((clamp(x, -1.0, 1.0) + 1.0) * 16)
+    var s = ""
+    (i=0:33){
+        i == 16: { s += "|", continue }
+        i == n:  { s += "*", continue }
+        s += "."
+    }()
+    :: s
+}
+
+var append_pcm16 = (out, x){
+    var v = floor(clamp(x, -1.0, 1.0) * 32767)
+    v < 0: v += 65536
+    append_le16(out, v)
+}
+
+var wav_bytes = (num_samples, sample_rate){
+    var out = list()
+    var data_bytes = num_samples * 2
+    var byte_rate = sample_rate * 2
+    append_ascii(out, "RIFF")
+    append_le32(out, 36 + data_bytes)
+    append_ascii(out, "WAVE")
+    append_ascii(out, "fmt ")
+    append_le32(out, 16)
+    append_le16(out, 1)
+    append_le16(out, 1)
+    append_le32(out, sample_rate)
+    append_le32(out, byte_rate)
+    append_le16(out, 2)
+    append_le16(out, 16)
+    append_ascii(out, "data")
+    append_le32(out, data_bytes)
+    (i=0:num_samples){
+        var t = i / sample_rate
+        append_pcm16(out, sample_at(t))
+    }()
+    :: out
+}
+
+
+print("═══ Tiny WAV Synth ═══")
+print("")
+
+var sample_rate = 4000
+var total_seconds = 1
+var num_samples = floor(sample_rate * total_seconds)
+var out_path = "samples/tmp_wav_synth.wav"
+write(out_path, wav_bytes(num_samples, sample_rate), bytes=true)
+
+print("Wrote " + out_path)
+print("sample_rate = " + str(sample_rate))
+print("seconds = " + str(total_seconds))
+print("samples = " + str(num_samples))
+print("")
+print("waveform preview:")
+(i=0:num_samples){
+    var t = i / 64.0
+    print(waveform_bar(sample_at(t)))
+}()
+print("")
+print("Done.")

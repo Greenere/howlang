@@ -416,8 +416,8 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `pi`                    | The constant π ≈ 3.14159… (a value, not a function)      |
 | `max(...)` / `min(...)` | Max/min of args, or reduction over a single list or tensor |
 | `ask(prompt)`           | Print prompt and read a line from stdin                  |
-| `read(path)`            | Read entire file as a string                             |
-| `write(path, v)`        | Write value to file (strings written raw, others repr'd) |
+| `read(path, bytes=true)`| Read file as raw byte list; default is text string       |
+| `write(path, v, bytes=true)` | Write raw bytes from a byte list/string; default is text/repr |
 | `args()`                | List of command-line arguments                           |
 | `par(lst, fn)`          | Apply `fn` to each element of `lst` in parallel; returns result list |
 | `gc()`                  | Trigger a garbage collection cycle                       |

@@ -1,0 +1,98 @@
+# game_of_life.how — Conway's Game of Life in Howlang
+#
+# The demo runs a small glider on a bounded grid and prints several
+# generations so the evolution is easy to watch in the terminal.
+
+
+var make_grid = (rows, cols){
+    var grid = list()
+    (r=0:rows){
+        var row = list()
+        (c=0:cols){ push(row, 0) }()
+        push(grid, row)
+    }()
+    :: grid
+}
+
+var clone_grid = (grid){
+    var out = list()
+    (r=0:len(grid)){
+        var row = list()
+        (c=0:len(grid(r))){ push(row, grid(r)(c)) }()
+        push(out, row)
+    }()
+    :: out
+}
+
+var set_alive = (grid, r, c){ grid(r)(c) = 1 }
+
+var count_neighbors = (grid, r, c){
+    var rows = len(grid)
+    var cols = len(grid(0))
+    var count = 0
+    (dr=-1:2){
+        (dc=-1:2){
+            dr == 0 and dc == 0: continue
+            var rr = r + dr
+            var cc = c + dc
+            rr < 0 or rr >= rows: continue
+            cc < 0 or cc >= cols: continue
+            count += grid(rr)(cc)
+        }()
+    }()
+    :: count
+}
+
+var next_grid = (grid){
+    var rows = len(grid)
+    var cols = len(grid(0))
+    var out = make_grid(rows, cols)
+    (r=0:rows){
+        (c=0:cols){
+            var n = count_neighbors(grid, r, c)
+            grid(r)(c) == 1 and (n == 2 or n == 3): { out(r)(c) = 1, continue }
+            grid(r)(c) == 0 and n == 3: out(r)(c) = 1
+        }()
+    }()
+    :: out
+}
+
+var render_grid = (grid){
+    var lines = list()
+    (r=0:len(grid)){
+        var line = ""
+        (c=0:len(grid(r))){
+            grid(r)(c) == 1: { line += "##", continue }
+            line += ".."
+        }()
+        push(lines, line)
+    }()
+    :: reduce(range(len(lines)), "", (acc, i){
+        i == 0 :: lines(i),
+        :: acc + "\n" + lines(i)
+    })
+}
+
+
+print("═══ Conway's Game of Life ═══")
+print("")
+
+var rows = 12
+var cols = 20
+var grid = make_grid(rows, cols)
+
+# A small glider near the upper-left corner.
+set_alive(grid, 1, 2)
+set_alive(grid, 2, 3)
+set_alive(grid, 3, 1)
+set_alive(grid, 3, 2)
+set_alive(grid, 3, 3)
+
+(step=0:8){
+    print("generation " + str(step))
+    print(render_grid(grid))
+    print("")
+    grid = next_grid(grid)
+}()
+
+print("Done.")

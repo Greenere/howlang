@@ -1,0 +1,55 @@
+# mandelbrot.how — ASCII Mandelbrot renderer in Howlang
+#
+# This keeps the output terminal-friendly: each row is a line of palette
+# characters, with darker characters representing faster escape.
+
+
+var palette = " .,:;ox%#@"
+
+var mandelbrot_char = (cx, cy, max_iter){
+    var x = 0.0
+    var y = 0.0
+    var iter = 0
+    var out = palette(len(palette)-1:len(palette))
+    (:){
+        iter >= max_iter :: out,
+        x*x + y*y > 4.0: {
+            var idx = floor(iter * (len(palette) - 1) / max_iter)
+            out = palette(idx:idx+1)
+            break
+        }
+        var x_new = x*x - y*y + cx
+        y = 2*x*y + cy
+        x = x_new
+        iter += 1
+    }()
+    :: out
+}
+
+var render_mandelbrot = (width, height, max_iter){
+    var lines = list()
+    (row=0:height){
+        var cy = -1.1 + 2.2 * row / (height - 1)
+        var line = ""
+        (col=0:width){
+            var cx = -2.2 + 3.0 * col / (width - 1)
+            line += mandelbrot_char(cx, cy, max_iter)
+        }()
+        push(lines, line)
+    }()
+    :: lines
+}
+
+
+print("═══ Mandelbrot Set ═══")
+print("")
+
+var width = 78
+var height = 28
+var max_iter = 40
+
+var art = render_mandelbrot(width, height, max_iter)
+(i=0:len(art)){ print(art(i)) }()
+
+print("")
+print("Done.")

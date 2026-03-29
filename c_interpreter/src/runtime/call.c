@@ -286,7 +286,9 @@ Value *eval_call_val(Value *callee, Value **args, const char **arg_names, int ar
         if (has_named_args(argc, arg_names)
             && strcmp(callee->builtin.name, "print")
             && strcmp(callee->builtin.name, "chr")
-            && strcmp(callee->builtin.name, "ord")) {
+            && strcmp(callee->builtin.name, "ord")
+            && strcmp(callee->builtin.name, "read")
+            && strcmp(callee->builtin.name, "write")) {
             for (int i = 0; i < argc; i++)
                 if (arg_names[i])
                     die_at(line, 0, "%s() got an unexpected named argument '%s'",

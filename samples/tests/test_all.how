@@ -268,6 +268,17 @@ assert_eq("range sum 1..5", sumr, 15)
 # --------------------------------------------------
 # Test 17: branch with block temp logic
 # --------------------------------------------------
+var bytes_path = "samples/tests/tmp_test_all_bytes.bin"
+var bytes_payload = {0, 1, 65, 255}
+write(bytes_path, bytes_payload, bytes=true)
+assert_eq("write/read bytes round trip", read(bytes_path, bytes=true), bytes_payload)
+var text_path = "samples/tests/tmp_test_all_text.txt"
+write(text_path, "hello")
+assert_eq("default text read/write still works", read(text_path), "hello")
+
+# --------------------------------------------------
+# Test 18: branch with block temp logic
+# --------------------------------------------------
 var score = (n){
     n < 0 :: "bad",
     n >= 0: {
@@ -283,7 +294,7 @@ assert_eq("branch temp small", score(3), "small")
 assert_eq("branch temp big", score(20), "big")
 
 # --------------------------------------------------
-# Test 18: tree traversal integration
+# Test 19: tree traversal integration
 # --------------------------------------------------
 var node = [val, left, right, leaf]{
     val: val,
@@ -306,13 +317,13 @@ assert_eq("tree traversal second", res(1), 0)
 assert_eq("tree traversal third", res(2), 2)
 
 # --------------------------------------------------
-# Test 19: list equality
+# Test 20: list equality
 # --------------------------------------------------
 assert_eq("list equality same", {1,2,3} == {1,2,3}, true)
 assert_eq("list equality diff", {1,2,3} == {1,2,4}, false)
 
 # --------------------------------------------------
-# Test 20: map equality
+# Test 21: map equality
 # --------------------------------------------------
 assert_eq("map equality same", {"a":1, "b":2} == {"a":1, "b":2}, true)
 assert_eq("map equality diff", {"a":1} == {"a":2}, false)
