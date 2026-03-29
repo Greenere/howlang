@@ -180,7 +180,7 @@ function scanTokens(text, document, diagnostics) {
       continue;
     }
 
-    const oneCharOps = new Set(['+', '-', '*', '/', '%', '=', '<', '>', ':', '.', ',', ';', '^']);
+    const oneCharOps = new Set(['+', '-', '*', '/', '%', '=', '<', '>', ':', '.', ',', ';', '^', '@']);
     const openBrackets = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
     const closeBrackets = new Map([[')', '('], [']', '['], ['}', '{']]);
 

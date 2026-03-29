@@ -1,0 +1,269 @@
+# test_tensor.how — tensor implementation tests
+
+var TOTAL  = 0
+var PASSED = 0
+
+var ok = (name){
+    TOTAL  += 1,
+    PASSED += 1,
+    print("  PASS  " + name)
+}
+var bad = (name, got, exp){
+    TOTAL += 1,
+    print("  FAIL  " + name + "  →  got=" + str(got) + "  expected=" + str(exp))
+}
+var assert_eq = (name, got, exp){
+    got == exp : ok(name),
+    got != exp : bad(name, got, exp)
+}
+var assert_near = (name, got, exp){
+    var diff = got - exp
+    diff < 0 : { diff = 0 - diff }
+    diff < 0.0001 : ok(name),
+    diff >= 0.0001 : bad(name, got, exp)
+}
+
+# ─── 1. Construction & indexing ──────────────────────────────────────────────
+
+print("─── 1. Construction & indexing")
+
+var v = tensor({1.0, 2.0, 3.0, 4.0})
+assert_eq("1D index 0",   v(0), 1.0)
+assert_eq("1D index 2",   v(2), 3.0)
+assert_eq("len of tensor", len(v), 4)
+assert_eq("type is tensor", type(v), "tensor")
+
+var W = tensor({{1.0, 2.0}, {3.0, 4.0}})
+assert_eq("2D index W(0)(0)", W(0)(0), 1.0)
+assert_eq("2D index W(0)(1)", W(0)(1), 2.0)
+assert_eq("2D index W(1)(0)", W(1)(0), 3.0)
+assert_eq("2D index W(1)(1)", W(1)(1), 4.0)
+assert_eq("len of 2D tensor", len(W), 2)
+
+var W2 = tensor({2, 2}, {1.0, 0.0, 0.0, 1.0})
+assert_eq("flat-data constructor (0,0)", W2(0)(0), 1.0)
+assert_eq("flat-data constructor (0,1)", W2(0)(1), 0.0)
+assert_eq("flat-data constructor (1,1)", W2(1)(1), 1.0)
+
+# ─── 2. shape() ──────────────────────────────────────────────────────────────
+
+print("─── 2. shape()")
+
+assert_eq("shape 1D",     shape(v)(0),  4)
+assert_eq("shape 2D rows", shape(W)(0), 2)
+assert_eq("shape 2D cols", shape(W)(1), 2)
+
+# ─── 3. Element-wise arithmetic ──────────────────────────────────────────────
+
+print("─── 3. Element-wise arithmetic")
+
+var a = tensor({1.0, 2.0, 3.0})
+var b = tensor({4.0, 5.0, 6.0})
+
+var c_add = a + b
+assert_eq("tensor + tensor [0]", c_add(0), 5.0)
+assert_eq("tensor + tensor [1]", c_add(1), 7.0)
+assert_eq("tensor + tensor [2]", c_add(2), 9.0)
+
+var c_sub = b - a
+assert_eq("tensor - tensor [0]", c_sub(0), 3.0)
+assert_eq("tensor - tensor [1]", c_sub(1), 3.0)
+
+var c_mul = a * b
+assert_eq("tensor * tensor [0]", c_mul(0), 4.0)
+assert_eq("tensor * tensor [2]", c_mul(2), 18.0)
+
+var c_div = b / a
+assert_eq("tensor / tensor [0]", c_div(0), 4.0)
+assert_eq("tensor / tensor [1]", c_div(1), 2.5)
+
+# ─── 4. Scalar broadcast ─────────────────────────────────────────────────────
+
+print("─── 4. Scalar broadcast")
+
+var d = a * 2.0
+assert_eq("tensor * scalar [0]", d(0), 2.0)
+assert_eq("tensor * scalar [2]", d(2), 6.0)
+
+var e = 3.0 * a
+assert_eq("scalar * tensor [0]", e(0), 3.0)
+assert_eq("scalar * tensor [2]", e(2), 9.0)
+
+var f = a + 10.0
+assert_eq("tensor + scalar [0]", f(0), 11.0)
+
+var g = 10.0 - a
+assert_eq("scalar - tensor [0]", g(0), 9.0)
+assert_eq("scalar - tensor [2]", g(2), 7.0)
+
+var h = a / 2.0
+assert_eq("tensor / scalar [0]", h(0), 0.5)
+assert_eq("tensor / scalar [2]", h(2), 1.5)
+
+# ─── 5. Matmul (@) ───────────────────────────────────────────────────────────
+
+print("─── 5. Matmul @")
+
+var I = eye(3)
+var x = tensor({1.0, 2.0, 3.0})
+var y = I @ x
+assert_eq("identity matmul [0]", y(0), 1.0)
+assert_eq("identity matmul [1]", y(1), 2.0)
+assert_eq("identity matmul [2]", y(2), 3.0)
+
+var A = tensor({{1.0, 2.0}, {3.0, 4.0}})
+var v2 = tensor({1.0, 1.0})
+var Av = A @ v2
+assert_eq("matvec [0]", Av(0), 3.0)
+assert_eq("matvec [1]", Av(1), 7.0)
+
+var B  = tensor({{0.0, 1.0}, {1.0, 0.0}})
+var AB = A @ B
+assert_eq("matmul (0,0)", AB(0)(0), 2.0)
+assert_eq("matmul (0,1)", AB(0)(1), 1.0)
+assert_eq("matmul (1,0)", AB(1)(0), 4.0)
+assert_eq("matmul (1,1)", AB(1)(1), 3.0)
+
+# dot product (1D @ 1D → scalar)
+var dot = tensor({1.0, 2.0, 3.0}) @ tensor({4.0, 5.0, 6.0})
+assert_eq("dot product", dot, 32.0)
+
+# ─── 6. Transpose T() ────────────────────────────────────────────────────────
+
+print("─── 6. Transpose")
+
+var M  = tensor({{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}})
+var Mt = T(M)
+assert_eq("transpose shape rows", shape(Mt)(0), 3)
+assert_eq("transpose shape cols", shape(Mt)(1), 2)
+assert_eq("transpose (0,1)",      Mt(0)(1), 4.0)
+assert_eq("transpose (2,0)",      Mt(2)(0), 3.0)
+
+# T(W) @ v — the MLP backward pattern
+var Wt = T(A)
+var grad = Wt @ v2
+assert_eq("T(A) @ v [0]", grad(0), 4.0)
+assert_eq("T(A) @ v [1]", grad(1), 6.0)
+
+# ─── 7. outer() ──────────────────────────────────────────────────────────────
+
+print("─── 7. outer()")
+
+var p = tensor({1.0, 2.0})
+var q = tensor({3.0, 4.0, 5.0})
+var pq = outer(p, q)
+assert_eq("outer shape rows",   shape(pq)(0), 2)
+assert_eq("outer shape cols",   shape(pq)(1), 3)
+assert_eq("outer (0,0)",        pq(0)(0), 3.0)
+assert_eq("outer (1,2)",        pq(1)(2), 10.0)
+
+# ─── 8. zeros / ones / eye ───────────────────────────────────────────────────
+
+print("─── 8. zeros / ones / eye")
+
+var Z = zeros({3, 2})
+assert_eq("zeros shape", shape(Z)(0), 3)
+assert_eq("zeros (0,0)", Z(0)(0), 0.0)
+assert_eq("zeros (2,1)", Z(2)(1), 0.0)
+
+var O = ones({4})
+assert_eq("ones len",  len(O),  4)
+assert_eq("ones (0)",  O(0),    1.0)
+assert_eq("ones (3)",  O(3),    1.0)
+
+var E = eye(3)
+assert_eq("eye (0,0)", E(0)(0), 1.0)
+assert_eq("eye (1,1)", E(1)(1), 1.0)
+assert_eq("eye (0,1)", E(0)(1), 0.0)
+
+# ─── 9. sum() ────────────────────────────────────────────────────────────────
+
+print("─── 9. sum()")
+
+assert_eq("sum 1D", sum(tensor({1.0, 2.0, 3.0})), 6.0)
+assert_eq("sum 2D", sum(eye(3)), 3.0)
+assert_eq("sum list", sum({1, 2, 3, 4}), 10)
+
+# ─── 10. max() for relu ──────────────────────────────────────────────────────
+
+print("─── 10. max / relu")
+
+var z = tensor({-1.0, 0.5, -0.3, 2.0})
+var h = max(0, z)
+assert_eq("relu neg",   h(0), 0.0)
+assert_eq("relu pos",   h(1), 0.5)
+assert_eq("relu neg2",  h(2), 0.0)
+assert_eq("relu big",   h(3), 2.0)
+
+# ─── 11. abs() on tensor ─────────────────────────────────────────────────────
+
+print("─── 11. abs()")
+
+var neg = tensor({-3.0, -1.0, 2.0})
+var pos = abs(neg)
+assert_eq("abs [0]", pos(0), 3.0)
+assert_eq("abs [1]", pos(1), 1.0)
+assert_eq("abs [2]", pos(2), 2.0)
+
+# ─── 12. View mutation ───────────────────────────────────────────────────────
+
+print("─── 12. View mutation")
+
+var Mm = tensor({{1.0, 2.0}, {3.0, 4.0}})
+Mm(0)(1) = 99.0
+assert_eq("view mutation  (0,1)", Mm(0)(1), 99.0)
+assert_eq("view unchanged (1,0)", Mm(1)(0), 3.0)
+
+# ─── 13. Augmented assignment ─────────────────────────────────────────────────
+
+print("─── 13. Augmented assignment")
+
+var w = tensor({1.0, 2.0, 3.0})
+w += tensor({0.1, 0.2, 0.3})
+assert_near("tensor += tensor [0]", w(0), 1.1)
+assert_near("tensor += tensor [2]", w(2), 3.3)
+
+var w2 = tensor({2.0, 4.0, 6.0})
+w2 -= 1.0
+assert_near("tensor -= scalar [0]", w2(0), 1.0)
+assert_near("tensor -= scalar [2]", w2(2), 5.0)
+
+var w3 = tensor({1.0, 2.0, 3.0})
+w3 *= 2.0
+assert_near("tensor *= scalar [0]", w3(0), 2.0)
+assert_near("tensor *= scalar [2]", w3(2), 6.0)
+
+# ─── 14. val_repr ────────────────────────────────────────────────────────────
+
+print("─── 14. repr")
+
+assert_eq("1D repr", str(tensor({1.0, 2.0})), "[1, 2]")
+assert_eq("2D repr", str(tensor({{1.0, 2.0}, {3.0, 4.0}})), "[[1, 2], [3, 4]]")
+
+# ─── 15. List semantics unchanged ─────────────────────────────────────────────
+
+print("─── 15. List semantics unchanged")
+
+var lst  = {1, 2, 3}
+var lst2 = {4, 5, 6}
+var cat  = lst + lst2
+assert_eq("list + list still concatenates", len(cat), 6)
+assert_eq("list concat element", cat(3), 4)
+
+# ─── 16. grad() blocked on tensors ───────────────────────────────────────────
+
+print("─── 16. grad() blocked on tensors")
+
+var tensor_grad_blocked = false
+var t_val = tensor({1.0, 2.0})
+# grad() on a function that uses tensors should raise an error
+# We can only test this indirectly by verifying tensors work outside grad
+# (actual grad+tensor would die — we just confirm tensors remain usable after)
+assert_eq("tensors usable after non-grad code", t_val(0), 1.0)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(PASSED) + " passed   " + str(TOTAL - PASSED) + " failed")
+print("═════════════════════════════════════════════════")

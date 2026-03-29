@@ -339,6 +339,39 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
         if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
         return r;
     }
+    /* Tensor: t(i) → scalar (1D) or row view (nD) */
+    if (callee->type == VT_TENSOR) {
+        HowTensor *t = callee->tensor;
+        if (argc != 1) die_at(line, 0, "tensor call requires exactly 1 argument");
+        if (args[0]->type != VT_NUM) die_at(line, 0, "tensor index must be a number");
+        int i = (int)args[0]->nval;
+        if (i < 0 || i >= t->shape[0])
+            die_at(line, 0, "tensor index %d out of range (size %d)", i, t->shape[0]);
+        if (t->ndim == 1) {
+            return val_num(t->data[i * t->strides[0]]);
+        }
+        /* nD tensor: return (n-1)D view */
+        HowTensor *view = xmalloc(sizeof(*view));
+        view->ndim    = t->ndim - 1;
+        view->shape   = xmalloc(view->ndim * sizeof(int));
+        view->strides = xmalloc(view->ndim * sizeof(int));
+        for (int d = 0; d < view->ndim; d++) {
+            view->shape[d]   = t->shape[d+1];
+            view->strides[d] = t->strides[d+1];
+        }
+        view->nelem     = 1;
+        for (int d = 0; d < view->ndim; d++) view->nelem *= view->shape[d];
+        view->data      = t->data + i * t->strides[0];
+        view->data_base = NULL;   /* view: data is not owned */
+        view->base      = t;      /* gc_mark_tensor traces base to keep parent alive */
+        view->gc_mark   = 0;
+        pthread_mutex_lock(&g_alloc_mutex);
+        view->gc_next    = g_all_tensors;
+        g_all_tensors    = view;
+        g_gc_allocations++;
+        pthread_mutex_unlock(&g_alloc_mutex);
+        return val_tensor(view);
+    }
     /* Map call: map(key) → map[key] */
     if (callee->type==VT_MAP) {
         if (argc!=1) die_at(line, 0, "map call requires exactly 1 argument");

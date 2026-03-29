@@ -84,6 +84,27 @@ lst(0) += 5      # [15, 99, 30]
 lst(9)           # none — out of bounds returns none
 ```
 
+**Tensor** — numeric n-dimensional array with flat storage and element-wise arithmetic:
+
+```
+var v = tensor({1.0, 2.0, 3.0})                    # shape {3}
+var W = tensor({{1.0, 2.0}, {3.0, 4.0}})          # shape {2, 2}
+var I = tensor({2, 2}, {1.0, 0.0, 0.0, 1.0})      # from shape + flat data
+
+v(0)            # 1.0
+W(1)(0)         # 3.0
+W(0)(1) = 9.0   # row views are writable
+
+v + v           # [2, 4, 6]
+v * 2.0         # [2, 4, 6]
+W @ v           # matrix-vector product
+T(W) @ v        # transpose then multiply
+```
+
+Tensor indexing uses the same call syntax as lists. Unlike lists, tensor `+`,
+`-`, `*`, and `/` are numeric element-wise operations; list `+` still means
+concatenation and is unchanged.
+
 ### Functions
 
 Functions are **branch maps** — a list of `condition :: return` pairs.
@@ -336,8 +357,9 @@ The `where` directive and path imports work with both relative and absolute path
 
 | Category   | Operators                               |
 |------------|-----------------------------------------|
-| Arithmetic | `+` `-` `*` `/` `%`                    |
+| Arithmetic | `+` `-` `*` `/` `%` `@`                |
 | List concat| `+` (when both sides are lists)         |
+| Tensor math| `+` `-` `*` `/` element-wise, `@` matmul |
 | Comparison | `==` `!=` `<` `>` `<=` `>=`            |
 | Logical    | `and` `or` `not`  (also `&&` `\|\|` `!`) |
 | Augmented  | `+=` `-=` `*=` `/=` `%=`               |
@@ -352,7 +374,7 @@ String concatenation uses `+` (auto-coerces either side to string).
 | Name                    | Description                                              |
 |-------------------------|----------------------------------------------------------|
 | `print(x, ...)`         | Print one or more values                                 |
-| `len(x)`                | Length of list, map, or string                           |
+| `len(x)`                | Length of list, map, string, or first tensor dimension   |
 | `range(n)`              | List `[0..n-1]`; also `range(a,b)`, `range(a,b,step)`   |
 | `str(x)`                | Convert to string                                        |
 | `num(x)`                | Convert to number                                        |
@@ -360,6 +382,8 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `type(x)`               | Type name as string                                      |
 | `list()`                | Create an empty mutable list                             |
 | `map()`                 | Create an empty mutable map                              |
+| `tensor(data)`          | Create a tensor from a numeric list or nested list       |
+| `tensor(shape, data)`   | Create a tensor from a shape list and flat numeric data  |
 | `push(lst, v)`          | Append value to list (mutates in place)                  |
 | `pop(lst)`              | Remove and return last element                           |
 | `keys(m)`               | List of keys in a map or instance                        |
@@ -368,17 +392,24 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `get_key(m, k)`         | Get by key/index (`m(k)` is equivalent)                  |
 | `set_key(m, k, v)`      | Set by key/index (`m(k) = v` is equivalent)              |
 | `del_key(m, k)`         | Delete a key from a map (no call-syntax equivalent)      |
-| `abs(n)`                | Absolute value                                           |
+| `shape(t)`              | Tensor shape as a list                                   |
+| `T(t)`                  | Transpose a tensor by swapping the last two dimensions   |
+| `outer(a, b)`           | Outer product of two 1D tensors                          |
+| `zeros(shape)`          | Zero-filled tensor with the given shape                  |
+| `ones(shape)`           | One-filled tensor with the given shape                   |
+| `eye(n)`                | `n × n` identity tensor                                  |
+| `sum(x)`                | Sum of a list or tensor                                  |
+| `abs(n)`                | Absolute value; element-wise for tensors                 |
 | `floor(n)`              | Floor                                                    |
 | `ceil(n)`               | Ceiling                                                  |
-| `sqrt(n)`               | Square root                                              |
+| `sqrt(n)`               | Square root; element-wise for tensors                    |
 | `sin(n)`                | Sine (radians)                                           |
 | `cos(n)`                | Cosine (radians)                                         |
 | `exp(n)`                | Natural exponential eⁿ                                   |
 | `log(n)`                | Natural logarithm ln(n)                                  |
 | `pow(base, exp)`        | Power: baseᵉˣᵖ                                           |
 | `pi`                    | The constant π ≈ 3.14159… (a value, not a function)      |
-| `max(...)` / `min(...)` | Max/min of args or a single list                         |
+| `max(...)` / `min(...)` | Max/min of args or a single list; broadcasts over tensors |
 | `ask(prompt)`           | Print prompt and read a line from stdin                  |
 | `read(path)`            | Read entire file as a string                             |
 | `write(path, v)`        | Write value to file (strings written raw, others repr'd) |
@@ -452,6 +483,10 @@ var b = 2.0
 var loss = (){ :: a * a + b }
 grad(loss)()          # {"a": 6.0, "b": 1.0}
 ```
+
+At the moment `grad()` is still scalar-oriented. Tensor values work well for
+numerical forward execution, but `grad()` is not yet a general tensor-autodiff
+system.
 
 ### Custom `grad` block
 

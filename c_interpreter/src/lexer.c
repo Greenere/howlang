@@ -143,6 +143,7 @@ TokenList *lex(const char *src) {
         case ',': t.type=TT_COMMA;    break;
         case '.': t.type=TT_DOT;      break;
         case '^': t.type=TT_CARET; break;
+        case '@': t.type=TT_AT; break;
         default: die_at(line, pos - line_start, "unexpected character '%c'", c);
         }
 #undef TWO

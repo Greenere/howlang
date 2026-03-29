@@ -18,6 +18,7 @@ typedef enum {
     VT_FUNC, VT_CLASS, VT_INSTANCE, VT_MODULE,
     VT_BUILTIN,
     VT_DUAL,    /* dual number {val, tan} — forward-mode AD */
+    VT_TENSOR,  /* N-dimensional float64 tensor */
 } VT;
 
 typedef struct HowList    HowList;
@@ -26,6 +27,7 @@ typedef struct HowFunc    HowFunc;
 typedef struct HowClass   HowClass;
 typedef struct HowInstance HowInstance;
 typedef struct HowModule  HowModule;
+typedef struct HowTensor  HowTensor;
 
 typedef struct KV { char *key; Value *val; } KV;
 
@@ -90,6 +92,18 @@ struct HowModule {
     struct HowModule *gc_next;
 };
 
+struct HowTensor {
+    double      *data;      /* flat row-major float64 array; NULL for views */
+    double      *data_base; /* pointer to start of allocation (owned by base or self) */
+    int         *shape;
+    int          ndim;
+    int          nelem;
+    int         *strides;
+    HowTensor   *base;      /* non-NULL = view; gc_mark_tensor traces base */
+    int          gc_mark;
+    struct HowTensor *gc_next;
+};
+
 typedef Value* (*BuiltinFn)(int argc, Value **argv, void *ctx);
 
 struct Value {
@@ -109,6 +123,7 @@ struct Value {
         HowModule   *mod;
         struct { BuiltinFn fn; void *ctx; char *name; } builtin;
         struct { double val; double tan; } dual;  /* VT_DUAL */
+        HowTensor   *tensor;                       /* VT_TENSOR */
     };
 };
 
@@ -158,6 +173,7 @@ extern HowFunc     *g_all_funcs;
 extern HowClass    *g_all_classes;
 extern HowInstance *g_all_instances;
 extern HowModule   *g_all_modules;
+extern HowTensor   *g_all_tensors;
 extern Env         *g_all_envs;
 extern size_t       g_gc_allocations;
 
@@ -195,6 +211,10 @@ void     map_decref(HowMap *m);
 HowList *list_new(void);
 Value   *val_list(HowList *l);
 void     list_decref(HowList *l);
+
+HowTensor *tensor_new(int ndim, int *shape);
+Value     *val_tensor(HowTensor *t);
+void       gc_mark_tensor(HowTensor *t);  /* for use in gc_mark_value */
 
 void     func_decref(HowFunc *f);
 void     cls_decref(HowClass *c);

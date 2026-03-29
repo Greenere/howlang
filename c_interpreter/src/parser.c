@@ -556,6 +556,7 @@ static Node *parse_mul(Parser *p) {
         if(p_check(p,TT_STAR))    op="*";
         else if(p_check(p,TT_SLASH))   op="/";
         else if(p_check(p,TT_PERCENT)) op="%";
+        else if(p_check(p,TT_AT))      op="@";
         else break;
         p_adv(p);
         Node *r=parse_unary(p);

@@ -12,7 +12,7 @@ syntax highlighting and lightweight lint diagnostics.
 - Registers the `howlang` language for `.how` files
 - Syntax highlighting for:
   - Keywords: `var`, `how`, `where`, `as`, `break`, `continue`, `and`, `or`, `not`
-  - Parallel loop marker: `^`
+  - Operators including parallel loop marker `^` and tensor matmul `@`
   - Constants: `true`, `false`, `none`
   - Strings (single and double-quoted), numbers, operators, comments
   - Function calls and class instantiation

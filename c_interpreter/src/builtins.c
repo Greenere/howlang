@@ -50,6 +50,7 @@ BUILTIN(len) {
     if (v->type==VT_MAP)  return val_num(v->map->len);
     if (v->type==VT_STR)  return val_num(strlen(v->sval));
     if (v->type==VT_INSTANCE) return val_num(v->inst->fields->len);
+    if (v->type==VT_TENSOR) return val_num(v->tensor->shape[0]);
     die("len() not supported for this type");
     return val_none();
 }
@@ -88,6 +89,7 @@ BUILTIN(type_fn) {
         case VT_MODULE:   return val_str("module");
         case VT_BUILTIN:  return val_str("builtin");
         case VT_DUAL:     return val_str("number");
+        case VT_TENSOR:   return val_str("tensor");
         default:          return val_str("unknown");
     }
 }
@@ -107,6 +109,12 @@ BUILTIN(abs_fn) {
     if (ARG(0)->type==VT_DUAL) {
         double v=ARG(0)->dual.val, t=ARG(0)->dual.tan;
         return val_dual(fabs(v), v>=0.0 ? t : -t);
+    }
+    if (ARG(0)->type == VT_TENSOR) {
+        HowTensor *t = ARG(0)->tensor;
+        HowTensor *out = tensor_new(t->ndim, t->shape);
+        for (int i = 0; i < t->nelem; i++) out->data[i] = fabs(t->data[i]);
+        return val_tensor(out);
     }
     return val_num(fabs(ARG(0)->nval));
 }
@@ -430,6 +438,15 @@ BUILTIN(push_import_dir_fn) {
 }
 
 BUILTIN(max_fn) {
+    /* max(threshold, tensor) — element-wise clamp, used for relu */
+    if (argc == 2 && ARG(0)->type == VT_NUM && ARG(1)->type == VT_TENSOR) {
+        double threshold = ARG(0)->nval;
+        HowTensor *t = ARG(1)->tensor;
+        HowTensor *out = tensor_new(t->ndim, t->shape);
+        for (int i = 0; i < t->nelem; i++)
+            out->data[i] = t->data[i] > threshold ? t->data[i] : threshold;
+        return val_tensor(out);
+    }
     if (argc==1 && ARG(0)->type==VT_LIST) {
         HowList *l = ARG(0)->list;
         if (!l->len) return val_none();
@@ -655,6 +672,164 @@ BUILTIN(par_fn) {
     return ret;
 }
 
+/* ── Tensor builtins ─────────────────────────────────────────────────────── */
+
+BUILTIN(tensor_fn) {
+    if (argc == 0) die("tensor() requires at least 1 argument");
+    if (argc == 1) {
+        Value *arg = ARG(0);
+        if (arg->type == VT_LIST) {
+            HowList *outer = arg->list;
+            if (outer->len == 0) {
+                int shape[] = {0};
+                HowTensor *t = tensor_new(1, shape);
+                return val_tensor(t);
+            }
+            if (outer->items[0]->type == VT_LIST) {
+                int rows = outer->len;
+                int cols = outer->items[0]->list->len;
+                int shape[] = {rows, cols};
+                HowTensor *t = tensor_new(2, shape);
+                for (int i = 0; i < rows; i++) {
+                    HowList *row = outer->items[i]->list;
+                    if (row->len != cols) die("tensor(): all rows must have the same length");
+                    for (int j = 0; j < cols; j++) {
+                        if (row->items[j]->type != VT_NUM) die("tensor(): all elements must be numbers");
+                        t->data[i*cols + j] = row->items[j]->nval;
+                    }
+                }
+                return val_tensor(t);
+            }
+            int shape[] = {outer->len};
+            HowTensor *t = tensor_new(1, shape);
+            for (int i = 0; i < outer->len; i++) {
+                if (outer->items[i]->type != VT_NUM) die("tensor(): all elements must be numbers");
+                t->data[i] = outer->items[i]->nval;
+            }
+            return val_tensor(t);
+        }
+        die("tensor() requires a list argument");
+    }
+    if (argc == 2) {
+        if (ARG(0)->type != VT_LIST) die("tensor(): first arg must be shape list");
+        if (ARG(1)->type != VT_LIST) die("tensor(): second arg must be data list");
+        HowList *shape_list = ARG(0)->list;
+        HowList *data_list  = ARG(1)->list;
+        int ndim = shape_list->len;
+        int *shape = xmalloc(ndim * sizeof(int));
+        for (int i = 0; i < ndim; i++) shape[i] = (int)shape_list->items[i]->nval;
+        HowTensor *t = tensor_new(ndim, shape);
+        free(shape);
+        if (data_list->len != t->nelem)
+            die("tensor(): data length %d doesn't match shape (expected %d)", data_list->len, t->nelem);
+        for (int i = 0; i < t->nelem; i++) {
+            if (data_list->items[i]->type != VT_NUM) die("tensor(): all data elements must be numbers");
+            t->data[i] = data_list->items[i]->nval;
+        }
+        return val_tensor(t);
+    }
+    die("tensor() takes 1 or 2 arguments");
+    return val_none();
+}
+
+BUILTIN(shape_fn) {
+    NEED(1);
+    if (ARG(0)->type != VT_TENSOR) die("shape() requires a tensor");
+    HowTensor *t = ARG(0)->tensor;
+    HowList *l = list_new();
+    for (int i = 0; i < t->ndim; i++) {
+        Value *v = val_num(t->shape[i]);
+        list_push(l, v); val_decref(v);
+    }
+    Value *v = val_list(l); list_decref(l); return v;
+}
+
+BUILTIN(transpose_fn) {
+    NEED(1);
+    if (ARG(0)->type != VT_TENSOR) die("T() requires a tensor");
+    HowTensor *t = ARG(0)->tensor;
+    if (t->ndim < 2) die("T() requires a tensor with at least 2 dimensions");
+    int m = t->shape[0], n = t->shape[1];
+    int out_shape[] = {n, m};
+    HowTensor *out = tensor_new(2, out_shape);
+    for (int i = 0; i < m; i++)
+        for (int j = 0; j < n; j++)
+            out->data[j*m + i] = t->data[i*t->strides[0] + j*t->strides[1]];
+    return val_tensor(out);
+}
+
+BUILTIN(outer_fn) {
+    NEED(2);
+    if (ARG(0)->type != VT_TENSOR || ARG(1)->type != VT_TENSOR)
+        die("outer() requires two tensors");
+    HowTensor *a = ARG(0)->tensor, *b = ARG(1)->tensor;
+    if (a->ndim != 1 || b->ndim != 1) die("outer() requires 1D tensors");
+    int shape[] = {a->nelem, b->nelem};
+    HowTensor *out = tensor_new(2, shape);
+    for (int i = 0; i < a->nelem; i++)
+        for (int j = 0; j < b->nelem; j++)
+            out->data[i * b->nelem + j] = a->data[i * a->strides[0]] * b->data[j * b->strides[0]];
+    return val_tensor(out);
+}
+
+BUILTIN(zeros_fn) {
+    NEED(1);
+    if (ARG(0)->type != VT_LIST) die("zeros() requires a shape list");
+    HowList *sl = ARG(0)->list;
+    int ndim = sl->len;
+    int *shape = xmalloc(ndim * sizeof(int));
+    for (int i = 0; i < ndim; i++) shape[i] = (int)sl->items[i]->nval;
+    HowTensor *t = tensor_new(ndim, shape);
+    free(shape);
+    memset(t->data, 0, t->nelem * sizeof(double));
+    return val_tensor(t);
+}
+
+BUILTIN(ones_fn) {
+    NEED(1);
+    if (ARG(0)->type != VT_LIST) die("ones() requires a shape list");
+    HowList *sl = ARG(0)->list;
+    int ndim = sl->len;
+    int *shape = xmalloc(ndim * sizeof(int));
+    for (int i = 0; i < ndim; i++) shape[i] = (int)sl->items[i]->nval;
+    HowTensor *t = tensor_new(ndim, shape);
+    free(shape);
+    for (int i = 0; i < t->nelem; i++) t->data[i] = 1.0;
+    return val_tensor(t);
+}
+
+BUILTIN(eye_fn) {
+    NEED(1);
+    if (ARG(0)->type != VT_NUM) die("eye() requires a number");
+    int n = (int)ARG(0)->nval;
+    int shape[] = {n, n};
+    HowTensor *t = tensor_new(2, shape);
+    memset(t->data, 0, t->nelem * sizeof(double));
+    for (int i = 0; i < n; i++) t->data[i*n + i] = 1.0;
+    return val_tensor(t);
+}
+
+BUILTIN(sum_fn) {
+    NEED(1);
+    if (ARG(0)->type == VT_TENSOR) {
+        double s = 0;
+        HowTensor *t = ARG(0)->tensor;
+        for (int i = 0; i < t->nelem; i++) s += t->data[i];
+        return val_num(s);
+    }
+    if (ARG(0)->type == VT_LIST) {
+        HowList *lst = ARG(0)->list;
+        double s = 0;
+        for (int i = 0; i < lst->len; i++) {
+            if (lst->items[i]->type != VT_NUM) die("sum(): list elements must be numbers");
+            s += lst->items[i]->nval;
+        }
+        return val_num(s);
+    }
+    die("sum() requires a tensor or list");
+    return val_none();
+}
+
 /* ── Builtin value factory ───────────────────────────────────────────────── */
 
 Value *make_builtin(const char *name, BuiltinFn fn) {
@@ -714,6 +889,14 @@ void setup_globals(Env *env) {
     REG("_host_call",      host_call_fn);
     REG("_basename", basename_fn);
     REG("_dirname",  dirname_fn);
+    REG("tensor",    tensor_fn);
+    REG("shape",     shape_fn);
+    REG("T",         transpose_fn);
+    REG("outer",     outer_fn);
+    REG("zeros",     zeros_fn);
+    REG("ones",      ones_fn);
+    REG("eye",       eye_fn);
+    REG("sum",       sum_fn);
     /* bool() as a function */
     Value *t = val_bool(1); env_set(env,"true",t); val_decref(t);
     Value *f = val_bool(0); env_set(env,"false",f); val_decref(f);

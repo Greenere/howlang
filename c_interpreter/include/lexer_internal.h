@@ -52,6 +52,7 @@ typedef enum
     TT_DBANG, /* !! — throw operator */
     TT_CATCH, /* catch keyword */
     TT_CARET, /* ^ — parallel loop marker */
+    TT_AT,    /* @ — matrix multiply operator */
 } TT;
 
 typedef struct

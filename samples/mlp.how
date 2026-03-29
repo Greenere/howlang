@@ -29,67 +29,6 @@ var relu_s = (x){
 var sigmoid_s = (x){ :: 0.5 + 0.5 * x / (1 + abs(x)) }
 
 
-# ── Vector / matrix helpers ───────────────────────────────────────────────────
-
-var dot = (a, b){
-    var s = 0
-    (i=0:len(a)){ s += a(i) * b(i) }()
-    :: s
-}
-
-var vadd   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)+b(i)) }(), :: o }
-var vsub   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)-b(i)) }(), :: o }
-var vmul   = (a, b){ var o=list(), (i=0:len(a)){ push(o, a(i)*b(i)) }(), :: o }
-var vscale = (v, s){ var o=list(), (i=0:len(v)){ push(o, v(i)*s)    }(), :: o }
-
-var matvec = (W, x){
-    var o = list()
-    (i=0:len(W)){ push(o, dot(W(i), x)) }()
-    :: o
-}
-
-var matvec_T = (W, v){
-    var n_cols = len(W(0))
-    var o = list()
-    (j=0:n_cols){
-        var s = 0
-        (i=0:len(W)){ s += W(i)(j) * v(i) }()
-        push(o, s)
-    }()
-    :: o
-}
-
-var outer = (a, b){
-    var mat = list()
-    (i=0:len(a)){
-        var row = list()
-        (j=0:len(b)){ push(row, a(i) * b(j)) }()
-        push(mat, row)
-    }()
-    :: mat
-}
-
-var matsub = (A, B){
-    var o = list()
-    (i=0:len(A)){
-        var r = list()
-        (j=0:len(A(i))){ push(r, A(i)(j) - B(i)(j)) }()
-        push(o, r)
-    }()
-    :: o
-}
-
-var matscale = (M, s){
-    var o = list()
-    (i=0:len(M)){
-        var r = list()
-        (j=0:len(M(i))){ push(r, M(i)(j) * s) }()
-        push(o, r)
-    }()
-    :: o
-}
-
-
 # ── Layer ─────────────────────────────────────────────────────────────────────
 #
 # Takes a scalar activation function act_s.
@@ -103,19 +42,19 @@ var Layer = [W, b, act_s]{
     z:      list(),
     h:      list(),
     forward: (x){
-        z = vadd(matvec(W, x), b),
+        z = W @ x + b,
         var out = list(),
         (i=0:len(z)){ push(out, act_s(z(i))) }(),
-        h = out,
+        h = tensor(out),
         :: h
     },
     backward: (grad_h, x_in, lr){
         var dz = list(),
         (i=0:len(z)){ push(dz, d_act(z(i))) }(),
-        var grad_z = vmul(grad_h, dz),
-        var grad_x = matvec_T(W, grad_z),
-        W = matsub(W, matscale(outer(grad_z, x_in), lr)),
-        b = vsub(b, vscale(grad_z, lr)),
+        var grad_z = grad_h * tensor(dz),
+        var grad_x = T(W) @ grad_z,
+        W -= lr * outer(grad_z, x_in),
+        b -= lr * grad_z,
         :: grad_x
     }
 }
@@ -138,7 +77,7 @@ var MLP = [l1, l2, l3]{
         var out = l3.forward(h2)
         var y   = out(0)
         var loss   = (y - target) * (y - target)
-        var grad_y = {2 * (y - target)}
+        var grad_y = tensor({2.0 * (y - target)})
         var grad_h2 = l3.backward(grad_y,  h2, lr)
         var grad_h1 = l2.backward(grad_h2, h1, lr)
         l1.backward(grad_h1, x, lr),
@@ -149,24 +88,24 @@ var MLP = [l1, l2, l3]{
 
 # ── Weights ───────────────────────────────────────────────────────────────────
 
-var W1 = {
-    { 1,  1},
-    { 1,  1},
-    {-1,  1},
-    {-1,  1}
-}
-var b1 = {-0.5, -1.5, 0, 0}
+var W1 = tensor({
+    { 1.0,  1.0},
+    { 1.0,  1.0},
+    {-1.0,  1.0},
+    {-1.0,  1.0}
+})
+var b1 = tensor({-0.5, -1.5, 0.0, 0.0})
 
-var W2 = {
-    {1, -2000000,  1,   1},
-    {0,  1,       18,   0},
-    {1,  11,       0, -100},
-    {0,  0,       11,   1}
-}
-var b2 = {0, 1, 0, 0}
+var W2 = tensor({
+    {1.0, -2000000.0,  1.0,    1.0},
+    {0.0,  1.0,       18.0,    0.0},
+    {1.0, 11.0,        0.0, -100.0},
+    {0.0,  0.0,       11.0,    1.0}
+})
+var b2 = tensor({0.0, 1.0, 0.0, 0.0})
 
-var W3 = {{2, -4, -2, 1}}
-var b3 = {-0.5}
+var W3 = tensor({{2.0, -4.0, -2.0, 1.0}})
+var b3 = tensor({-0.5})
 
 var net = MLP[
     Layer[W1, b1, relu_s],
@@ -177,8 +116,8 @@ var net = MLP[
 
 # ── Helper: print current predictions ────────────────────────────────────────
 
-var inputs  = {{0,0}, {0,1}, {1,0}, {1,1}}
-var targets = {0, 1, 1, 0}
+var inputs  = tensor({{0.0, 0.0}, {0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}})
+var targets = {0.0, 1.0, 1.0, 0.0}
 
 var show_predictions = (){
     print("  input    target   output   correct?")

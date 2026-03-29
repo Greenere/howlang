@@ -10,6 +10,7 @@ HowFunc     *g_all_funcs    = NULL;
 HowClass    *g_all_classes  = NULL;
 HowInstance *g_all_instances = NULL;
 HowModule   *g_all_modules  = NULL;
+HowTensor   *g_all_tensors  = NULL;
 Env         *g_all_envs     = NULL;
 
 size_t g_gc_allocations = 0;
@@ -105,6 +106,37 @@ HowList *list_new(void) {
     return l;
 }
 Value *val_list(HowList *l) { Value *v = val_new(VT_LIST); v->list = l; l->refcount++; return v; }
+
+HowTensor *tensor_new(int ndim, int *shape) {
+    HowTensor *t = xmalloc(sizeof(*t));
+    t->ndim    = ndim;
+    t->shape   = xmalloc(ndim * sizeof(int));
+    t->strides = xmalloc(ndim * sizeof(int));
+    memcpy(t->shape, shape, ndim * sizeof(int));
+    t->nelem = 1;
+    for (int i = 0; i < ndim; i++) t->nelem *= shape[i];
+    if (ndim > 0) {
+        t->strides[ndim-1] = 1;
+        for (int i = ndim-2; i >= 0; i--)
+            t->strides[i] = t->strides[i+1] * shape[i+1];
+    }
+    t->data_base = xmalloc(t->nelem * sizeof(double));
+    t->data      = t->data_base;
+    t->base      = NULL;
+    t->gc_mark   = 0;
+    pthread_mutex_lock(&g_alloc_mutex);
+    t->gc_next    = g_all_tensors;
+    g_all_tensors = t;
+    g_gc_allocations++;
+    pthread_mutex_unlock(&g_alloc_mutex);
+    return t;
+}
+
+Value *val_tensor(HowTensor *t) {
+    Value *v = val_new(VT_TENSOR);
+    v->tensor = t;
+    return v;
+}
 
 /* ── Reference counting ──────────────────────────────────────────────────── */
 
@@ -328,6 +360,41 @@ char *val_repr(Value *v) {
             return xstrdup(buf);
         }
         case VT_BUILTIN: return xstrdup("<builtin>");
+        case VT_TENSOR: {
+            HowTensor *t = v->tensor;
+            Buf b = {0};
+            if (t->ndim == 1) {
+                buf_append(&b, "[");
+                for (int i = 0; i < t->shape[0]; i++) {
+                    if (i) buf_append(&b, ", ");
+                    char tmp[32];
+                    double d = t->data[i * t->strides[0]];
+                    if (d == (long long)d) snprintf(tmp,sizeof(tmp),"%lld",(long long)d);
+                    else snprintf(tmp,sizeof(tmp),"%g",d);
+                    buf_append(&b, tmp);
+                }
+                buf_append(&b, "]");
+            } else if (t->ndim == 2) {
+                buf_append(&b, "[");
+                for (int i = 0; i < t->shape[0]; i++) {
+                    if (i) buf_append(&b, ", ");
+                    buf_append(&b, "[");
+                    for (int j = 0; j < t->shape[1]; j++) {
+                        if (j) buf_append(&b, ", ");
+                        char tmp[32];
+                        double d = t->data[i*t->strides[0] + j*t->strides[1]];
+                        if (d == (long long)d) snprintf(tmp,sizeof(tmp),"%lld",(long long)d);
+                        else snprintf(tmp,sizeof(tmp),"%g",d);
+                        buf_append(&b, tmp);
+                    }
+                    buf_append(&b, "]");
+                }
+                buf_append(&b, "]");
+            } else {
+                buf_append(&b, "<tensor>");
+            }
+            return buf_done(&b);
+        }
         default:         return xstrdup("<unknown>");
     }
 }
@@ -338,6 +405,7 @@ int how_truthy(Value *v) {
     if (v->type == VT_NUM)  return v->nval != 0.0;
     if (v->type == VT_STR)  return v->sval[0] != '\0';
     if (v->type == VT_DUAL) return v->dual.val != 0.0;
+    if (v->type == VT_TENSOR) return 1;
     return 1;
 }
 
@@ -391,6 +459,7 @@ static void gc_mark_value(Value *v) {
         case VT_CLASS:    gc_mark_class(v->cls);     break;
         case VT_INSTANCE: gc_mark_instance(v->inst); break;
         case VT_MODULE:   gc_mark_module(v->mod);    break;
+        case VT_TENSOR:   gc_mark_tensor(v->tensor); break;
         default: break;
     }
 }
@@ -425,6 +494,11 @@ static void gc_mark_module(HowModule *m) {
     if (!m || m->gc_mark) return;
     m->gc_mark = 1;
     gc_mark_env(m->env);
+}
+void gc_mark_tensor(HowTensor *t) {
+    if (!t || t->gc_mark) return;
+    t->gc_mark = 1;
+    if (t->base) gc_mark_tensor(t->base);
 }
 static void gc_mark_env(Env *e) {
     if (!e || e->gc_mark) return;
@@ -509,6 +583,18 @@ static void gc_sweep_modules(void) {
         free(m->name); free(m);
     }
 }
+static void gc_sweep_tensors(void) {
+    HowTensor **pp = &g_all_tensors;
+    while (*pp) {
+        HowTensor *t = *pp;
+        if (t->gc_mark) { t->gc_mark = 0; pp = &t->gc_next; continue; }
+        *pp = t->gc_next;
+        if (!t->base) free(t->data_base);
+        free(t->shape);
+        free(t->strides);
+        free(t);
+    }
+}
 static void gc_sweep_envs(void) {
     Env **pp = &g_all_envs;
     while (*pp) {
@@ -556,6 +642,7 @@ void gc_collect(Env *root_env) {
     gc_sweep_classes();
     gc_sweep_instances();
     gc_sweep_modules();
+    gc_sweep_tensors();
     gc_sweep_envs();
     g_gc_collections++;
     g_gc_in_progress = 0;
