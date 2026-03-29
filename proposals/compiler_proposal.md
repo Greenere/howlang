@@ -13,45 +13,63 @@ tests passing.
 
 ---
 
-## What's already reusable — zero changes needed
+## What's already reusable — with a few surgical additions
 
 | Module | Reuse |
 |---|---|
 | `lexer.c`, `parser.c` | Fully reusable as-is |
-| `ast.h` | Fully reusable; `is_ret`, `is_parallel`, `is_forrange` flags are useful, not a problem |
+| `ast.h` | Reusable as the frontend AST, but it will need compiler metadata fields |
 | `gc.c` — `Value`, GC mark/sweep | Fully reusable for the VM |
 | `builtins.c`, `setup_globals()` | Fully reusable |
 | `import.c` — `exec_import()` | Fully reusable |
-| `call.c` — `eval_call_val()` | Reusable for mixed-mode (compiled calling interpreted and vice versa) |
+| `call.c` — `eval_call_val()` | Reusable as the mixed-mode interop boundary |
 
 The existing tree-walking interpreter is **not removed**. The bytecode path is
 additive — you get both, and can migrate hot paths incrementally.
 
+Important correction: this is not literally "zero changes" to the runtime layer.
+We will need a compiled-function representation in `Value`/`HowFunc` space, a VM
+entry point, and driver plumbing. The point is that we can keep the interpreter
+semantics and most of the runtime implementation intact.
+
 ---
 
-## The real blocker: name resolution
+## The real blockers: name resolution, function representation, and scope fidelity
 
-The ChatGPT review lists 10 issues. Nine of them are long-term polish. There is
-one genuine blocker for a compiler backend:
+The original version of this proposal understated the gap a little. Name
+resolution is the first blocker, but there are two more practical blockers we
+should acknowledge up front:
 
-**`eval()` resolves names at runtime by walking the `Env*` chain.** A compiler
-cannot emit correct `LOAD`/`STORE` instructions without knowing statically:
+1. **`eval()` resolves names at runtime by walking the `Env*` chain.**
+   A compiler cannot emit correct `LOAD`/`STORE` instructions without knowing
+   statically:
 
 - Is this name a local variable? → emit `OP_LOAD_LOCAL slot`
 - Is it captured from an enclosing function? → emit `OP_LOAD_UPVAL slot`
 - Is it a module-level global? → emit `OP_LOAD_GLOBAL name`
 
-This requires a new **semantic analysis pass** over the AST — a single new file
-before the compiler itself is possible. Everything else falls out from there.
+2. **The runtime has no compiled callable representation today.**
+   `Value` can hold `VT_FUNC` / `HowFunc`, but that object currently means
+   "AST body + closure env". A VM needs a first-class compiled closure value:
+   either a new `VT_COMPILED_FUNC` or a backend tag inside `HowFunc`.
+
+3. **Howlang's scopes are not plain expression scopes.**
+   `N_BRANCH`, `N_FORLOOP`, `N_CLASS`, named call args, `break` / `next`,
+   and assignment-to-undeclared-variable rules all need to survive the lowering.
+
+The right first step is still a semantic analysis pass, but the proposal should
+explicitly treat the callable representation and scope rules as part of the MVP,
+not as details that "fall out automatically."
 
 ---
 
-## Three-phase plan
+## Revised phase plan
 
 ```
-Phase 1 — Semantic analysis     sema.h / sema.c
-Phase 2 — Bytecode design       bytecode.h
-Phase 3 — Compiler + VM         compiler.c / vm.c
+Phase 1 — Semantic analysis        sema.h / sema.c
+Phase 2 — Bytecode + closure ABI   bytecode.h
+Phase 3 — Core compiler + VM       compiler.c / vm.c
+Phase 4 — Feature parity           classes/import/catch/parallel
 ```
 
 The existing tree-walker is untouched throughout. Each phase produces a working,
@@ -74,11 +92,15 @@ Add `sema` to `howlang_runtime` in CMakeLists.txt.
 
 One pass over the AST, bottom-up. For each function scope it:
 
-1. Collects all `var` declarations and parameter names → local slot indices
-2. Detects which names in inner functions reference outer function's locals →
-   upvalues (captures)
-3. Tags each `N_NAME` AST node with a resolved kind and slot index
-4. Tags each function (`N_FUNC`) node with its local count and upvalue list
+1. Collects all `var` declarations, loop variables, and parameter names
+   into local slot indices
+2. Detects which names in inner functions reference outer function locals
+   and records upvalues
+3. Resolves every `N_IDENT` load and assignment target to LOCAL / UPVAL / GLOBAL
+4. Annotates each `N_FUNC`, `N_CLASS`, and `N_FORLOOP` with local-count / capture metadata
+5. Validates compile-time-only invariants we currently discover late at runtime
+   such as duplicate named args, unknown named args for statically known callees,
+   and assignment to undeclared locals when resolvable statically
 
 ### Structs
 
@@ -87,7 +109,7 @@ One pass over the AST, bottom-up. For each function scope it:
 
 typedef enum { NAME_LOCAL, NAME_UPVAL, NAME_GLOBAL } NameKind;
 
-/* Written into Node for N_NAME nodes after resolution */
+/* Written into identifier/assignment sites after resolution */
 typedef struct {
     NameKind kind;
     int      slot;   /* local/upval slot index; -1 for globals */
@@ -117,20 +139,35 @@ void     sema_free(SemaCtx *ctx);
 
 ### Annotating AST nodes
 
-`Node` in `ast.h` already has a `line` field and a large union. Add one field to
-the `N_NAME` variant for the resolved info:
+The original draft said "add an `N_NAME` payload". That does not match the
+current AST: the node kind is `N_IDENT`, and identifiers are currently stored in
+`node->sval`. Because the existing union is already shared across many node
+shapes, the least invasive plan is to add **generic compiler metadata fields**
+outside the union instead of reshaping the node variants.
 
 ```c
-/* In the N_NAME case of the Node union: */
-struct { char *name; NameInfo resolved; } nname;
+/* In ast.h, adjacent to line/type rather than inside one union arm */
+typedef struct {
+    int      valid;   /* 1 once sema has resolved this site */
+    NameKind kind;
+    int      slot;    /* local/upval slot, -1 for globals */
+} ResolvedName;
+
+typedef struct {
+    int    nlocals;
+    int    nupvals;
+    char **upval_names;
+} ClosureInfo;
 ```
 
-And add to the `N_FUNC` / `N_CLASS` node:
+Then extend `Node` with something like:
 ```c
-int    nlocals;     /* filled by sema */
-int    nupvals;     /* filled by sema */
-char **upval_names; /* filled by sema */
+ResolvedName resolved;      /* used by N_IDENT and assignment targets */
+ClosureInfo  closure_info;  /* used by N_FUNC / N_CLASS / N_FORLOOP */
 ```
+
+This keeps the parser simple and avoids threading new mini-structs through every
+existing union arm.
 
 ### Error handling
 
@@ -140,7 +177,7 @@ compiler needs to report multiple errors per file.
 
 ---
 
-## Phase 2 — Bytecode design
+## Phase 2 — Bytecode design and closure ABI
 
 ### New file
 
@@ -185,6 +222,7 @@ typedef enum {
     /* Functions / calls */
     OP_MAKE_FUNC,     /* A = proto index, B = nupvals; pops B upval Values */
     OP_CALL,          /* A = argc; pops callee + argc args, pushes result */
+    OP_CALL_NAMED,    /* A = argc, B = const index of arg-name vector */
     OP_RETURN,        /* pops top of stack, returns it */
     OP_RETURN_NONE,
 
@@ -200,8 +238,11 @@ typedef enum {
     OP_DUP,           /* duplicate top of stack */
     OP_DUP2,          /* duplicate top two stack values */
 
-    /* Modules */
+    /* Modules / errors */
     OP_IMPORT,        /* A = modname const, B = alias const (0 = none) */
+    OP_THROW,
+    OP_SETUP_CATCH,
+    OP_END_CATCH,
 
     /* Misc */
     OP_CONCAT,        /* string + coercion, same as interpreter's + for strings */
@@ -221,6 +262,19 @@ typedef struct Proto {
     int       *lines;      /* parallel to code[], source line per instruction */
 } Proto;
 ```
+
+### Named arguments
+
+This proposal needs one update for the current language: calls now carry
+`arg_names` in the AST. We have two reasonable options:
+
+1. **Canonicalize at compile time** when the callee is statically known
+   (`N_IDENT` bound to a user function / class in the same module)
+2. **Emit `OP_CALL_NAMED`** when arg names must be preserved at runtime
+   (dynamic calls, builtins like `print(..., newline=false)`, mixed-mode interop)
+
+The pragmatic path is: implement both, but only use `OP_CALL_NAMED` when
+canonicalization is impossible.
 
 ### Why stack-based over register-based
 
@@ -263,21 +317,22 @@ The key translation rules:
 
 | AST node | Bytecode |
 |---|---|
-| `N_NAME` (LOCAL) | `OP_LOAD_LOCAL slot` |
-| `N_NAME` (UPVAL) | `OP_LOAD_UPVAL slot` |
-| `N_NAME` (GLOBAL) | `OP_LOAD_GLOBAL const_idx(name)` |
+| `N_IDENT` (LOCAL) | `OP_LOAD_LOCAL slot` |
+| `N_IDENT` (UPVAL) | `OP_LOAD_UPVAL slot` |
+| `N_IDENT` (GLOBAL) | `OP_LOAD_GLOBAL const_idx(name)` |
 | `N_NUM`, `N_STR`, `N_BOOL`, `N_NONE` | `OP_LOAD_CONST idx` |
 | `N_BINOP "+"` (strings) | `OP_CONCAT` |
 | `N_BINOP` (arithmetic) | compile l, compile r, `OP_ADD` etc. |
 | `N_ASSIGN var` | compile rhs, `OP_STORE_LOCAL/UPVAL/GLOBAL` |
 | `N_ASSIGN obj(k)=v` | compile obj, compile k, compile v, `OP_SET_INDEX` |
-| `N_CALL` | compile callee, compile args..., `OP_CALL argc` |
+| `N_CALL` | compile callee, compile args..., `OP_CALL` / `OP_CALL_NAMED` |
 | `N_FUNC` | emit `OP_MAKE_FUNC proto_idx nupvals` |
 | `N_BRANCH` (the howlang `cond: body` list) | see below |
-| `N_RETURN` (`::`) | compile expr, `OP_RETURN` |
-| `N_FORRANGE` | compile start/stop, emit loop with `OP_JUMP_IF_FALSE` |
-| `N_LOOP` (`(:)={}`) | emit loop with `OP_JUMP_IF_TRUE break_target` |
+| `N_BRANCH` with `is_ret` | compile expr, `OP_RETURN` |
+| `N_FORLOOP` | compile start/stop, emit loop with `OP_JUMP_IF_FALSE` |
+| `N_FUNC` with `is_loop` | emit unbounded loop form |
 | `N_IMPORT` | `OP_IMPORT modname alias` |
+| `N_CATCH` | `OP_SETUP_CATCH`, body, handler, `OP_END_CATCH` |
 
 ### Compiling the branch model
 
@@ -301,6 +356,23 @@ For `cond :: expr` (immediate-return branch):
     OP_RETURN
     skip_label:
 ```
+
+### Runtime callable representation
+
+The VM cannot execute raw `Proto*` values directly because the current runtime
+only knows how to call `VT_BUILTIN`, `VT_CLASS`, and `VT_FUNC`. The proposal
+needs an explicit compiled closure object. Two viable designs:
+
+1. Add `VT_COMPILED_FUNC` with:
+   - `Proto *proto`
+   - `Env *closure_globals` or module env
+   - `UpVal **upvals`
+2. Extend `HowFunc` with a backend tag:
+   - `FUNC_AST`
+   - `FUNC_PROTO`
+
+I recommend **option 1** because it keeps the interpreter's `HowFunc` meaning
+clean and minimizes accidental branching through AST-only fields in VM code.
 
 ### VM
 
@@ -339,9 +411,9 @@ Value *vm_run(VM *vm, Proto *proto);
 
 The VM **shares `g_globals` with the interpreter**. This means builtins,
 imported modules, and user-defined globals are visible to both paths. A function
-compiled to bytecode can call an interpreted function and vice versa — `OP_CALL`
-checks whether the callee is a `Proto`-backed function or a `HowFunc`, and
-dispatches accordingly.
+compiled to bytecode can call an interpreted function and vice versa — call
+dispatch checks whether the callee is a compiled closure, `HowFunc`, builtin, or
+class, and routes accordingly.
 
 ### Upvalue handling
 
@@ -354,15 +426,27 @@ closures (`make_adder`, `memoize`, etc.) without changing the value system.
 
 ---
 
-## What does NOT change
+## What does NOT change semantically
 
 - `howlang_frontend` — zero changes
-- `gc.c`, `builtins.c` — zero changes
-- `runtime.c`, `call.c`, `ad.c`, `parallel.c`, `import.c` — zero changes
-- All existing test suites continue to pass
+- `gc.c`, `builtins.c` — largely unchanged
 - The tree-walking interpreter remains the default until the VM is stable
-- AD (`grad()`) continues to work through the interpreter path; tensor + VM
-  integration is a separate future proposal
+- AD (`grad()`) continues to work through the interpreter path first
+
+What *does* change:
+
+- `ast.h` gains compiler metadata
+- `runtime_internal.h` / `Value` gain a compiled callable representation
+- `driver.c` gets compile / disassemble flags
+- `call.c` becomes the mixed-mode boundary for compiled/interpreted calls
+
+Also: "all existing test suites continue to pass" is too aggressive for the
+first VM milestone. The realistic promise is:
+
+- Phase 3 passes a **core subset**: expressions, variables, closures, loops,
+  basic calls, maps/lists, and imports if included
+- Phase 4 closes parity gaps for classes, catch/throw, parallel loops, and any
+  remaining builtins / named-call corner cases
 
 ---
 
@@ -430,14 +514,32 @@ built and shipped without the compiler.
 
 ---
 
-## Milestone summary
+## Recommended deliverables by phase
 
 | Phase | New files | Deliverable |
 |---|---|---|
-| 1 | `sema.h`, `sema.c` | Name resolution; every `N_NAME` knows its kind + slot |
-| 2 | `bytecode.h` | Defined instruction set + `Proto` struct; no runtime yet |
-| 3a | `compiler.c` | AST → bytecode; print disassembly with `-S` flag |
-| 3b | `vm.c`, `vm.h` | Stack VM; runs compiled protos; passes all test suites |
+| 1 | `sema.h`, `sema.c` | Name resolution on the real AST (`N_IDENT`, `N_FORLOOP`, named calls) |
+| 2 | `bytecode.h` | Defined instruction set, closure ABI, and compiled callable representation |
+| 3a | `compiler.c` | AST → bytecode for the core subset; `-S` disassembly |
+| 3b | `vm.c`, `vm.h` | Stack VM for the core subset; mixed-mode calls work |
+| 4 | compiler/vm follow-ups | Classes, catch/throw, parallel loops, full language parity |
 
-After 3b: the MLP / tensor path can move to the VM for the advertised speedup,
-the AD path stays on the interpreter, and both coexist cleanly.
+After 3b: we have a credible end-to-end compiler backend. After Phase 4: we can
+reasonably talk about flipping selected programs or hot functions to the VM.
+
+## Suggested implementation order inside Phase 3
+
+To keep momentum high, build the compiler backend in this order:
+
+1. Literals, locals, globals, arithmetic, comparisons
+2. `var`, assignment, blocks, returns
+3. Function literals, closures, plain calls
+4. Lists, maps, indexing, field access
+5. `N_BRANCH`, `N_FORLOOP`, unbounded loop functions
+6. Imports and module globals
+7. Classes
+8. `catch` / `throw`
+9. Parallel loops
+
+That sequence matches the current interpreter structure well and lets us land
+useful milestones without pretending feature parity is immediate.
