@@ -238,3 +238,78 @@ char *buf_done(Buf *b)
     b->len = b->cap = 0;
     return r;
 }
+
+int how_utf8_decode_one(const char *s, int *codepoint, int *nbytes)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    int cp = 0;
+    int len = 0;
+
+    if (!p[0])
+        return 0;
+    if (p[0] < 0x80) {
+        cp = p[0];
+        len = 1;
+    } else if ((p[0] & 0xE0) == 0xC0) {
+        if ((p[1] & 0xC0) != 0x80)
+            return 0;
+        cp = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+        len = 2;
+        if (cp < 0x80)
+            return 0;
+    } else if ((p[0] & 0xF0) == 0xE0) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80)
+            return 0;
+        cp = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+        len = 3;
+        if (cp < 0x800)
+            return 0;
+    } else if ((p[0] & 0xF8) == 0xF0) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80)
+            return 0;
+        cp = ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+        len = 4;
+        if (cp < 0x10000)
+            return 0;
+    } else {
+        return 0;
+    }
+
+    if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+        return 0;
+    if (codepoint)
+        *codepoint = cp;
+    if (nbytes)
+        *nbytes = len;
+    return 1;
+}
+
+int how_utf8_encode_one(int codepoint, char out[5])
+{
+    if (codepoint < 0 || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF))
+        return 0;
+    if (codepoint < 0x80) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+        return 1;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+        return 1;
+    }
+    out[0] = (char)(0xF0 | (codepoint >> 18));
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (codepoint & 0x3F));
+    out[4] = '\0';
+    return 1;
+}

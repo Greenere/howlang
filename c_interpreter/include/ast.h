@@ -56,7 +56,7 @@ struct Node {
         struct { char *op; Node *target; Node *value; } assign;
         struct { Node *obj; char *attr; } dot;
         struct { char *path; char *alias; } import_node;
-        struct { Node *callee; NodeList args; int bracket; } call;
+        struct { Node *callee; NodeList args; StrList arg_names; int bracket; } call;
         struct { Node *col; Node *start; Node *stop; } slice;  /* col(start:stop) */
         struct { StrList params; NodeList branches; int is_loop; Node *grad_body; } func;  /* is_loop: (:){} loop */
         struct { char *iter_var; Node *start; Node *stop; NodeList branches; int is_parallel; } forloop;

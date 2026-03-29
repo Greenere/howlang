@@ -161,7 +161,7 @@ Value *compute_grad_closure(Value *primal_fn, Signal *sig) {
     }
 
     g_tape_active = 1;
-    Value *result = eval_call_val(primal_fn, NULL, 0, sig, 0);
+    Value *result = eval_call_val(primal_fn, NULL, NULL, 0, sig, 0);
     g_tape_active = 0;
 
     for (int i = 0; i < saved_len; i++) {
@@ -231,7 +231,7 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
             Value *cgfn_wrap = val_new(VT_FUNC);
             cgfn_wrap->func = cgfn; cgfn->refcount++;
             GC_ROOT_VALUE(cgfn_wrap);
-            Value *gres = eval_call_val(cgfn_wrap, gargs, n + 1, sig, line);
+            Value *gres = eval_call_val(cgfn_wrap, gargs, NULL, n + 1, sig, line);
             GC_UNROOT_VALUE(); cgfn->refcount--; val_decref(cgfn_wrap);
             val_decref(gargs[n]);
             free(gargs);
@@ -266,7 +266,7 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
     GC_ROOT_VALUE(pfn_wrap);
     g_tape_active = 1;
     Signal fwd_sig = {SIG_NONE, NULL};
-    Value *fwd = eval_call_val(pfn_wrap, tape_args, n, &fwd_sig, line);
+    Value *fwd = eval_call_val(pfn_wrap, tape_args, NULL, n, &fwd_sig, line);
     g_tape_active = 0;
     GC_UNROOT_VALUE(); primal_fn->refcount--; val_decref(pfn_wrap);
     for (int i = 0; i < n; i++) val_decref(tape_args[i]);
@@ -289,7 +289,7 @@ Value *call_custom_grad(HowFunc *primal_fn, Value **args, int argc,
     Value *cgfn_wrap = val_new(VT_FUNC);
     cgfn_wrap->func = cgfn; cgfn->refcount++;
     GC_ROOT_VALUE(cgfn_wrap);
-    Value *override_map = eval_call_val(cgfn_wrap, grad_args, n + 1, sig, line);
+    Value *override_map = eval_call_val(cgfn_wrap, grad_args, NULL, n + 1, sig, line);
     GC_UNROOT_VALUE(); cgfn->refcount--; val_decref(cgfn_wrap);
     val_decref(grad_args[n]);
     free(grad_args);

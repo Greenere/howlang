@@ -531,7 +531,8 @@ Value *eval(Node *node, Env *env, Signal *sig) {
             }
         }
         callee->refcount++;  /* hold extra ref so callee survives the call */
-        Value *res = eval_call_val(callee, args, argc, sig, node->line);
+        const char **arg_names = node->call.arg_names.len ? (const char **)node->call.arg_names.s : NULL;
+        Value *res = eval_call_val(callee, args, arg_names, argc, sig, node->line);
         for (int i=0;i<argc;i++) { GC_UNROOT_VALUE(); val_decref(args[i]); }
         free(args);
         GC_UNROOT_VALUE();
@@ -718,7 +719,7 @@ Value *eval(Node *node, Env *env, Signal *sig) {
                 return handler;
             }
             GC_ROOT_VALUE(handler);
-            Value *result = eval_call_val(handler, &err, 1, sig, node->line);
+            Value *result = eval_call_val(handler, &err, NULL, 1, sig, node->line);
             GC_UNROOT_VALUE(); /* handler */
             GC_UNROOT_VALUE(); /* err */
             val_decref(handler);

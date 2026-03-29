@@ -219,6 +219,23 @@ assert_eq("list read after set_key", arr(1), 99)
 assert_eq("list get_key oob returns none", get_key(arr, 10), none)
 
 # --------------------------------------------------
+# Test 14: named args and chr/ord
+# --------------------------------------------------
+var fmt = (left, right, sep){
+    :: left + sep + right
+}
+assert_eq("named args reorder function call", fmt(right="B", left="A", sep="-"), "A-B")
+assert_eq("named args mix positional + named", fmt("A", right="B", sep="-"), "A-B")
+var pair = [left, right]{
+    show: (){ :: left + ":" + right }
+}
+assert_eq("named args reorder class call", pair[right="B", left="A"].show(), "A:B")
+assert_eq("ord ascii", ord("A"), 65)
+assert_eq("chr ascii", chr(65), "A")
+assert_eq("ord unicode", ord("🙂"), 128578)
+assert_eq("chr unicode", chr(128578), "🙂")
+
+# --------------------------------------------------
 # Test 14: keys() and values()
 # --------------------------------------------------
 var obj = {"x": 7, "y": 9}

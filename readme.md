@@ -373,11 +373,13 @@ String concatenation uses `+` (auto-coerces either side to string).
 
 | Name                    | Description                                              |
 |-------------------------|----------------------------------------------------------|
-| `print(x, ...)`         | Print one or more values                                 |
+| `print(x, ..., newline=false)` | Print one or more values; named args support `newline` and `end` |
 | `len(x)`                | Length of list, map, string, or first tensor dimension   |
 | `range(n)`              | List `[0..n-1]`; also `range(a,b)`, `range(a,b,step)`   |
 | `str(x)`                | Convert to string                                        |
 | `num(x)`                | Convert to number                                        |
+| `chr(n)`                | Unicode code point to single-character string            |
+| `ord(s)`                | Single-character string to Unicode code point            |
 | `bool(x)`               | Convert to bool                                          |
 | `type(x)`               | Type name as string                                      |
 | `list()`                | Create an empty mutable list                             |

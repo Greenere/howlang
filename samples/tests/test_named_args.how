@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# test_named_args.how — Tests for named call arguments and chr/ord/print
+# ─────────────────────────────────────────────────────────────────────────────
+
+var passed = 0
+var failed = 0
+
+var assert_eq = (label, got, expected){
+    got == expected: {
+        passed = passed + 1,
+        print("  PASS  " + label)
+    },
+    got != expected: {
+        failed = failed + 1,
+        print("  FAIL  " + label + "  got=" + str(got) + "  expected=" + str(expected))
+    }
+}
+
+var tests_dir = dirof(__file)
+
+print("─── Function named args ───────────────────────────────────────────────")
+
+var fmt = (left, right, sep){
+    :: left + sep + right
+}
+
+assert_eq("reorder function call", fmt(right="B", left="A", sep="-"), "A-B")
+assert_eq("mix positional and named", fmt("A", right="B", sep="-"), "A-B")
+assert_eq("all positional still works", fmt("A", "B", "-"), "A-B")
+
+print("─── Class named args ──────────────────────────────────────────────────")
+
+var pair = [left, right]{
+    show: (){ :: left + ":" + right }
+}
+
+assert_eq("reorder class call", pair[right="B", left="A"].show(), "A:B")
+assert_eq("mix positional and named class call", pair["A", right="B"].show(), "A:B")
+
+print("─── chr / ord ─────────────────────────────────────────────────────────")
+
+assert_eq("ord ascii", ord("A"), 65)
+assert_eq("chr ascii", chr(65), "A")
+assert_eq("ord unicode", ord("🙂"), 128578)
+assert_eq("chr unicode", chr(128578), "🙂")
+
+print("─── print named args ─────────────────────────────────────────────────")
+
+var print_cmd = "cd " + tests_dir + " && ../../c_interpreter/build/howlang test_named_args_print_fixture.how > test_named_args_print.out"
+assert_eq("fixture command exits cleanly", run(print_cmd), 0)
+assert_eq("print newline/end control", read(tests_dir + "test_named_args_print.out"), "ABC\n")
+
+print("")
+print("═════════════════════════════════════════════════")
+print("  " + str(passed) + " passed   " + str(failed) + " failed")
+print("═════════════════════════════════════════════════")

@@ -33,13 +33,32 @@ static void write_value_to_path(const char *path, Value *v) {
 /* ── Built-in function implementations ──────────────────────────────────── */
 
 BUILTIN(print) {
+    int newline = 1;
+    const char *end = "\n";
+    int printed = 0;
+
     for (int i=0;i<argc;i++) {
+        if (arg_names && arg_names[i]) {
+            if (!strcmp(arg_names[i], "newline")) {
+                if (argv[i]->type != VT_BOOL) die("print(newline=...) requires a bool");
+                newline = argv[i]->bval;
+                continue;
+            }
+            if (!strcmp(arg_names[i], "end")) {
+                if (argv[i]->type != VT_STR) die("print(end=...) requires a string");
+                end = argv[i]->sval;
+                continue;
+            }
+            die("print() got an unexpected named argument '%s'", arg_names[i]);
+        }
         char *s = val_repr(argv[i]);
-        if (i) printf(" ");
+        if (printed) printf(" ");
         printf("%s", s);
+        printed = 1;
         free(s);
     }
-    printf("\n");
+    if (!newline && !strcmp(end, "\n")) end = "";
+    printf("%s", end);
     return val_none();
 }
 
@@ -71,6 +90,32 @@ BUILTIN(num_fn) {
     }
     die("num() cannot convert this type");
     return val_none();
+}
+
+BUILTIN(chr_fn) {
+    int codepoint;
+    char out[5];
+
+    if (argc != 1) die("chr() requires exactly 1 argument");
+    if (arg_names && arg_names[0] && strcmp(arg_names[0], "codepoint"))
+        die("chr() got an unexpected named argument '%s'", arg_names[0]);
+    if (ARG(0)->type != VT_NUM) die("chr() requires a numeric code point");
+    codepoint = (int)ARG(0)->nval;
+    if (ARG(0)->nval != (double)codepoint) die("chr() requires an integer code point");
+    if (!how_utf8_encode_one(codepoint, out)) die("chr() code point out of range");
+    return val_str(out);
+}
+
+BUILTIN(ord_fn) {
+    int codepoint, nbytes;
+
+    if (argc != 1) die("ord() requires exactly 1 argument");
+    if (arg_names && arg_names[0] && strcmp(arg_names[0], "char"))
+        die("ord() got an unexpected named argument '%s'", arg_names[0]);
+    if (ARG(0)->type != VT_STR) die("ord() requires a string");
+    if (!how_utf8_decode_one(ARG(0)->sval, &codepoint, &nbytes) || ARG(0)->sval[nbytes] != '\0')
+        die("ord() requires a single character string");
+    return val_num(codepoint);
 }
 
 BUILTIN(type_fn) {
@@ -528,7 +573,7 @@ BUILTIN(time_fn) {
     struct timespec t1;
     clock_gettime(CLOCK_MONOTONIC, &t);
     Signal sig = {SIG_NONE, NULL};
-    Value *res = eval_call_val(ARG(0), NULL, 0, &sig, 0);
+    Value *res = eval_call_val(ARG(0), NULL, NULL, 0, &sig, 0);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     val_decref(res);
     if (sig.type == SIG_ERROR) {
@@ -551,7 +596,7 @@ BUILTIN(host_call_fn) {
     Signal sig = {SIG_NONE, NULL};
     Value **argv2 = xmalloc(args_list->len * sizeof(Value*) + 1);
     for (int i=0;i<args_list->len;i++) argv2[i] = args_list->items[i];
-    Value *res = eval_call_val(fn, argv2, args_list->len, &sig, 0);
+    Value *res = eval_call_val(fn, argv2, NULL, args_list->len, &sig, 0);
     free(argv2);
     if (sig.type==SIG_RETURN) { val_decref(sig.retval); sig.retval=NULL; }
     if (sig.type==SIG_ERROR) {
@@ -580,7 +625,7 @@ static void *par_builtin_worker(void *varg) {
     for (int i = arg->start; i < arg->end; i++) {
         if (arg->had_error) break;
         Value *item = arg->items[i];
-        Value *res  = eval_call_val(arg->fn_val, &item, 1, &sig, 0);
+        Value *res  = eval_call_val(arg->fn_val, &item, NULL, 1, &sig, 0);
         if (sig.type == SIG_ERROR) {
             char *s = sig.retval ? val_repr(sig.retval) : NULL;
             snprintf(arg->error, sizeof(arg->error), "%s",
@@ -848,6 +893,8 @@ void setup_globals(Env *env) {
     REG("len",     len);
     REG("str",     str_fn);
     REG("num",     num_fn);
+    REG("chr",     chr_fn);
+    REG("ord",     ord_fn);
     REG("type",    type_fn);
     REG("floor",   floor_fn);
     REG("ceil",    ceil_fn);

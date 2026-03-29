@@ -20,6 +20,71 @@ static const char *grad_param_name(Value *primal, int i) {
     return NULL;
 }
 
+static int has_named_args(int argc, const char **arg_names) {
+    if (!arg_names) return 0;
+    for (int i = 0; i < argc; i++)
+        if (arg_names[i]) return 1;
+    return 0;
+}
+
+static int find_param_index(StrList params, const char *name) {
+    for (int i = 0; i < params.len; i++)
+        if (!strcmp(params.s[i], name))
+            return i;
+    return -1;
+}
+
+static Value **bind_named_args(StrList params, Value **args, const char **arg_names,
+                               int argc, int line, const char *callee_kind) {
+    Value **bound = xmalloc((size_t)params.len * sizeof(Value *));
+    int *used = xmalloc((size_t)params.len * sizeof(int));
+    int next_positional = 0;
+
+    for (int i = 0; i < params.len; i++) {
+        bound[i] = NULL;
+        used[i] = 0;
+    }
+
+    for (int i = 0; i < argc; i++) {
+        int slot = -1;
+        if (!arg_names || !arg_names[i]) {
+            while (next_positional < params.len && used[next_positional])
+                next_positional++;
+            slot = next_positional++;
+            if (slot >= params.len) {
+                free(used);
+                free(bound);
+                die_at(line, 0, "%s expected %d args but got %d", callee_kind, params.len, argc);
+            }
+        } else {
+            slot = find_param_index(params, arg_names[i]);
+            if (slot < 0) {
+                free(used);
+                free(bound);
+                die_at(line, 0, "%s got an unexpected named argument '%s'", callee_kind, arg_names[i]);
+            }
+        }
+        if (used[slot]) {
+            free(used);
+            free(bound);
+            die_at(line, 0, "multiple values provided for argument '%s'", params.s[slot]);
+        }
+        used[slot] = 1;
+        bound[slot] = args[i];
+    }
+
+    for (int i = 0; i < params.len; i++) {
+        if (!used[i]) {
+            free(used);
+            free(bound);
+            die_at(line, 0, "missing required argument '%s'", params.s[i]);
+        }
+    }
+
+    free(used);
+    return bound;
+}
+
 /* ── Unbounded (:)= loop ─────────────────────────────────────────────────── */
 
 void run_loop(HowFunc *fn, Signal *sig) {
@@ -85,15 +150,19 @@ void run_loop(HowFunc *fn, Signal *sig) {
 
 /* ── Class instantiation ─────────────────────────────────────────────────── */
 
-Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig) {
+Value *instantiate_class(HowClass *cls, Value **args, const char **arg_names, int argc, Signal *sig, int line) {
     UNUSED(sig);
-    if (argc != cls->params.len)
-        die("class expects %d args but got %d", cls->params.len, argc);
+    if (!has_named_args(argc, arg_names) && argc != cls->params.len)
+        die_at(line, 0, "class expects %d args but got %d", cls->params.len, argc);
+
+    Value **bound_args = args;
+    if (has_named_args(argc, arg_names))
+        bound_args = bind_named_args(cls->params, args, arg_names, argc, line, "class");
 
     Env *init_env = env_new(cls->closure);
     GC_ROOT_ENV(init_env);
     for (int i=0;i<cls->params.len;i++)
-        env_set(init_env, cls->params.s[i], args[i]);
+        env_set(init_env, cls->params.s[i], bound_args[i]);
 
     HowMap *fields = map_new();
 
@@ -197,7 +266,7 @@ Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig) {
             Signal init_sig = {SIG_NONE, NULL};
             Value *no_args[] = {NULL};
             GC_ROOT_VALUE(result);
-            Value *init_ret = eval_call_val(init_fn, no_args, 0, &init_sig, 0);
+            Value *init_ret = eval_call_val(init_fn, no_args, NULL, 0, &init_sig, 0);
             GC_UNROOT_VALUE();
             if (init_ret) val_decref(init_ret);
             if (init_sig.type == SIG_RETURN && init_sig.retval)
@@ -205,18 +274,28 @@ Value *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig) {
         }
     }
 
+    if (bound_args != args) free(bound_args);
     GC_UNROOT_ENV();
     return result;
 }
 
 /* ── Function call dispatch ──────────────────────────────────────────────── */
 
-Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line) {
+Value *eval_call_val(Value *callee, Value **args, const char **arg_names, int argc, Signal *sig, int line) {
     if (callee->type==VT_BUILTIN) {
-        return callee->builtin.fn(argc, args, callee->builtin.ctx);
+        if (has_named_args(argc, arg_names)
+            && strcmp(callee->builtin.name, "print")
+            && strcmp(callee->builtin.name, "chr")
+            && strcmp(callee->builtin.name, "ord")) {
+            for (int i = 0; i < argc; i++)
+                if (arg_names[i])
+                    die_at(line, 0, "%s() got an unexpected named argument '%s'",
+                           callee->builtin.name, arg_names[i]);
+        }
+        return callee->builtin.fn(argc, args, arg_names, callee->builtin.ctx);
     }
     if (callee->type==VT_CLASS) {
-        return instantiate_class(callee->cls, args, argc, sig);
+        return instantiate_class(callee->cls, args, arg_names, argc, sig, line);
     }
     if (callee->type==VT_FUNC) {
         HowFunc *fn = callee->func;
@@ -240,7 +319,7 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                     Value *da = val_dual(t->data[i], 1.0);
                     GC_ROOT_VALUE(da);
                     Signal inner3 = {SIG_NONE, NULL};
-                    Value *res = eval_call_val(primal_v, &da, 1, &inner3, line);
+                    Value *res = eval_call_val(primal_v, &da, NULL, 1, &inner3, line);
                     GC_UNROOT_VALUE(); val_decref(da);
                     out->data[i] = (res && res->type == VT_DUAL) ? res->dual.tan : 0.0;
                     if (res) val_decref(res);
@@ -267,7 +346,7 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                 double xt = (args[0]->type == VT_DUAL) ? args[0]->dual.tan : 0.0;
                 Value *da = val_dual(xv, 1.0);
                 GC_ROOT_VALUE(da);
-                Value *res = eval_call_val(primal_v, &da, 1, sig, line);
+                Value *res = eval_call_val(primal_v, &da, NULL, 1, sig, line);
                 GC_UNROOT_VALUE(); val_decref(da);
                 if (sig->type != SIG_NONE) return res;
                 double gr;
@@ -285,7 +364,7 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                     Value *da2 = val_dual(xv + h, 1.0);
                     GC_ROOT_VALUE(da2);
                     Signal sig2 = {SIG_NONE, NULL};
-                    Value *res2 = eval_call_val(primal_v, &da2, 1, &sig2, line);
+                    Value *res2 = eval_call_val(primal_v, &da2, NULL, 1, &sig2, line);
                     GC_UNROOT_VALUE(); val_decref(da2);
                     double gr2 = (res2 && res2->type == VT_DUAL) ? res2->dual.tan :
                                  (res2 && res2->type == VT_NUM ? 0.0 : gr);
@@ -321,7 +400,7 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
                             da[j] = (j==i) ? val_dual(args[j]->nval,1.0)
                                            : val_dual(args[j]->nval,0.0);
                         Signal inner2 = {SIG_NONE, NULL};
-                        Value *res = eval_call_val(primal_v, da, argc, &inner2, line);
+                        Value *res = eval_call_val(primal_v, da, NULL, argc, &inner2, line);
                         for (int j=0; j<argc; j++) val_decref(da[j]);
                         free(da);
                         if (inner2.type != SIG_NONE) {
@@ -383,19 +462,23 @@ Value *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int lin
             if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
             return r;
         }
-        if (argc != fn->params.len)
+        if (!has_named_args(argc, arg_names) && argc != fn->params.len)
             die_at(line, 0, "expected %d args but got %d", fn->params.len, argc);
+        Value **bound_args = args;
+        if (has_named_args(argc, arg_names))
+            bound_args = bind_named_args(fn->params, args, arg_names, argc, line, "function");
         /* Hold a ref to closure so it survives env_decref(local) which decrefs parent */
         Env *closure = fn->closure;
         if (closure) closure->refcount++;
         Env *local = env_new(fn->closure);
         GC_ROOT_ENV(local);
         for (int i=0;i<fn->params.len;i++)
-            env_set(local, fn->params.s[i], args[i]);
+            env_set(local, fn->params.s[i], bound_args[i]);
         run_branches(&fn->branches, local, sig);
         GC_UNROOT_ENV();
         env_decref(local);
         if (closure) env_decref(closure);
+        if (bound_args != args) free(bound_args);
         Value *r = sig->type==SIG_RETURN ? sig->retval : val_none();
         if (sig->type==SIG_RETURN) { sig->type=SIG_NONE; sig->retval=NULL; }
         return r;

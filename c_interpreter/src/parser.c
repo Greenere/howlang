@@ -169,6 +169,7 @@ static Node *parse_expr(Parser *p);
 static Node *parse_stmt(Parser *p);
 static Node *parse_branch(Parser *p);
 static void  parse_func_body(Parser *p, NodeList *out);
+static Node *parse_catch(Parser *p);
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Statement parsing                                                           */
@@ -420,6 +421,7 @@ static Node *parse_add(Parser *p);
 static Node *parse_mul(Parser *p);
 static Node *parse_unary(Parser *p);
 static Node *parse_call(Parser *p);
+static Node *parse_call_arg(Parser *p, char **arg_name);
 static Node *parse_atom(Parser *p);
 
 static Node *parse_expr(Parser *p) { return parse_assign(p); }
@@ -573,6 +575,16 @@ static Node *parse_unary(Parser *p) {
     return parse_call(p);
 }
 
+static Node *parse_call_arg(Parser *p, char **arg_name) {
+    *arg_name = NULL;
+    if (p_check(p, TT_IDENT) && p_peek(p, 1)->type == TT_EQ) {
+        *arg_name = xstrdup(p_adv(p)->sval);
+        p_adv(p); /* '=' */
+        return parse_catch(p);
+    }
+    return parse_catch(p);
+}
+
 /* parse call/dot/slice postfix, plus bracket-call and bracket class-call */
 static Node *parse_call(Parser *p) {
     int line = p_peek(p,0)->line;
@@ -609,8 +621,9 @@ static Node *parse_call(Parser *p) {
             } else if (!p_check(p,TT_RPAREN)) {
                 /* parse first arg at catch-level (not assign-level) to prevent
                    f(x=5) from silently assigning to outer x, but allow catch */
-                Node *first = parse_catch(p);
-                if (p_check(p, TT_COLON)) {
+                char *first_name = NULL;
+                Node *first = parse_call_arg(p, &first_name);
+                if (!first_name && p_check(p, TT_COLON)) {
                     is_slice = 1;
                     slice_start = first;
                     p_adv(p); /* consume : */
@@ -623,8 +636,17 @@ static Node *parse_call(Parser *p) {
                     c->call.callee  = n;
                     c->call.bracket = 0;
                     nl_push(&c->call.args, first);
-                    while (p_match(p,TT_COMMA) && !p_check(p,TT_RPAREN))
-                        nl_push(&c->call.args, parse_catch(p));
+                    sl_push(&c->call.arg_names, first_name);
+                    int saw_named = (first_name != NULL);
+                    while (p_match(p,TT_COMMA) && !p_check(p,TT_RPAREN)) {
+                        char *arg_name = NULL;
+                        Node *arg = parse_call_arg(p, &arg_name);
+                        if (saw_named && !arg_name)
+                            die("positional arguments cannot follow named arguments");
+                        if (arg_name) saw_named = 1;
+                        nl_push(&c->call.args, arg);
+                        sl_push(&c->call.arg_names, arg_name);
+                    }
                     p_expect(p,TT_RPAREN,"expected ')'");
                     last_line = cur_line;
                     n = c;
@@ -657,9 +679,20 @@ static Node *parse_call(Parser *p) {
             c->call.callee  = n;
             c->call.bracket = 1;
             if (!p_check(p,TT_RBRACKET)) {
-                nl_push(&c->call.args, parse_or(p));
-                while (p_match(p,TT_COMMA) && !p_check(p,TT_RBRACKET))
-                    nl_push(&c->call.args, parse_or(p));
+                char *first_name = NULL;
+                Node *first = parse_call_arg(p, &first_name);
+                nl_push(&c->call.args, first);
+                sl_push(&c->call.arg_names, first_name);
+                int saw_named = (first_name != NULL);
+                while (p_match(p,TT_COMMA) && !p_check(p,TT_RBRACKET)) {
+                    char *arg_name = NULL;
+                    Node *arg = parse_call_arg(p, &arg_name);
+                    if (saw_named && !arg_name)
+                        die("positional arguments cannot follow named arguments");
+                    if (arg_name) saw_named = 1;
+                    nl_push(&c->call.args, arg);
+                    sl_push(&c->call.arg_names, arg_name);
+                }
             }
             p_expect(p,TT_RBRACKET,"expected ']'");
             last_line = cur_line;

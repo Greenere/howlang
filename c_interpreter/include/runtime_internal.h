@@ -104,7 +104,7 @@ struct HowTensor {
     struct HowTensor *gc_next;
 };
 
-typedef Value* (*BuiltinFn)(int argc, Value **argv, void *ctx);
+typedef Value* (*BuiltinFn)(int argc, Value **argv, const char **arg_names, void *ctx);
 
 struct Value {
     VT  type;
@@ -148,7 +148,7 @@ typedef struct { SigType type; Value *retval; } Signal;
 
 /* ── Builtin helpers ─────────────────────────────────────────────────────── */
 
-#define BUILTIN(name) Value *builtin_##name(int argc, Value **argv, void *ctx __attribute__((unused)))
+#define BUILTIN(name) Value *builtin_##name(int argc, Value **argv, const char **arg_names __attribute__((unused)), void *ctx __attribute__((unused)))
 #define NEED(n) do{ if(argc<(n)) die("builtin requires %d args, got %d",(n),argc); }while(0)
 #define ARG(i)  (argc>(i) ? argv[i] : V_NONE_SINGLETON)
 
@@ -257,8 +257,8 @@ Value  *eval(Node *node, Env *env, Signal *sig);
 void    run_branches(NodeList *branches, Env *env, Signal *sig);
 void    run_loop(HowFunc *fn, Signal *sig);
 Value  *run_parallel_loop(HowFunc *fn, Signal *sig);
-Value  *instantiate_class(HowClass *cls, Value **args, int argc, Signal *sig);
-Value  *eval_call_val(Value *callee, Value **args, int argc, Signal *sig, int line);
+Value  *instantiate_class(HowClass *cls, Value **args, const char **arg_names, int argc, Signal *sig, int line);
+Value  *eval_call_val(Value *callee, Value **args, const char **arg_names, int argc, Signal *sig, int line);
 void    exec_body(Node *body, Env *env, Signal *sig);
 void    exec_stmt(Node *node, Env *env, Signal *sig);
 

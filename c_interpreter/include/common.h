@@ -28,6 +28,8 @@ typedef struct
 void  buf_push(Buf *b, char c);
 void  buf_append(Buf *b, const char *s);
 char *buf_done(Buf *b);  /* NUL-terminates, transfers ownership; resets Buf to zero */
+int   how_utf8_decode_one(const char *s, int *codepoint, int *nbytes);
+int   how_utf8_encode_one(int codepoint, char out[5]);
 
 /* Source context — set once per file/eval so error messages can print the line. */
 void        how_set_source_context(const char *name, const char *text);
