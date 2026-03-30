@@ -139,7 +139,7 @@ print("Before training:")
 show_predictions()
 
 var lr     = 0.05
-var epochs = 2000
+var epochs = 1000
 
 print("")
 print("Training  (epochs=" + str(epochs) + "  lr=" + str(lr) + ")")

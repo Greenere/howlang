@@ -12,6 +12,12 @@
 #   - output head
 #
 # The model is intentionally tiny and the backward pass is written out by hand.
+#
+# Optimizations vs original:
+#   1. inv_scale precomputed once globally (sqrt was recomputed every step)
+#   2. set_grad(relu_s) + grad() replaces manual relu_grad_s (idiomatic auto-diff)
+#   3. Q/K/V projections run in parallel with ^{} (independent per token)
+#   4. Forward attention loop uses ^{} to process positions concurrently
 
 
 # ── Scalar / tensor helpers ───────────────────────────────────────────────
@@ -20,10 +26,11 @@ var relu_s = (x){
     x > 0 :: x,
     :: 0
 }
-var relu_grad_s = (x){
-    x > 0 :: 1.0,
-    :: 0.0
-}
+set_grad(relu_s, (x, g){
+    x > 0 :: g,
+    :: 0
+})
+var d_relu = grad(relu_s)
 
 var softmax = (scores){
     var m = max(scores)
@@ -59,12 +66,6 @@ var zeros_rows = (n, d){
     :: rows
 }
 
-var zeros_scalars = (n){
-    var xs = list()
-    (i=0:n){ push(xs, 0.0) }()
-    :: xs
-}
-
 var update_row_in_place = (mat, row_idx, grad_row, lr){
     (j=0:len(grad_row)){
         mat(row_idx)(j) = mat(row_idx)(j) - lr * grad_row(j)
@@ -77,6 +78,9 @@ var update_row_in_place = (mat, row_idx, grad_row, lr){
 var vocab_size = 26
 var d_model = 8
 var d_ff = 12
+
+# Precomputed once — used in every forward and backward pass
+var inv_scale = 1.0 / sqrt(d_model)
 
 
 # ── Trainable parameters ──────────────────────────────────────────────────
@@ -130,57 +134,42 @@ var embed_sequence = (ids){
 var model_forward = (ids){
     var x = embed_sequence(ids)
     var n = len(ids)
-    var scale = sqrt(d_model)
 
-    var q = list()
-    var k = list()
-    var v = list()
-    (i=0:n){
-        push(q, Wq @ x(i))
-        push(k, Wk @ x(i))
-        push(v, Wv @ x(i))
-    }()
+    # Q/K/V projections — all n positions are independent; run in parallel
+    var qkv = (i=0:n)^{ :: {Wq @ x(i), Wk @ x(i), Wv @ x(i)} }()
+    var q = map(qkv, (t){ :: t(0) })
+    var k = map(qkv, (t){ :: t(1) })
+    var v = map(qkv, (t){ :: t(2) })
 
-    var attn = list()
-    var ctxs = list()
-    var attn_out = list()
-    var z1s = list()
-    var h1s = list()
-    var ys = list()
-    var logits = list()
-    var probs = list()
-
-    (i=0:n){
+    # Per-position attention + FFT — each position reads q/k/v but writes
+    # only to its own result slot, so positions run concurrently with ^{}
+    var fwd = (i=0:n)^{
         var scores = list()
         (j=0:i+1){
-            push(scores, (q(i) @ k(j)) / scale)
+            push(scores, (q(i) @ k(j)) * inv_scale)
         }()
         var weights = softmax(scores)
-        push(attn, weights)
 
         var ctx = zeros({d_model})
-        (j=0:i+1){
-            ctx += v(j) * weights(j)
-        }()
-        push(ctxs, ctx)
+        (j=0:i+1){ ctx += v(j) * weights(j) }()
 
         var aout = Wo @ ctx + x(i)
-        push(attn_out, aout)
-
-        var z1 = W1 @ aout + b1
-        push(z1s, z1)
-
-        var h1 = map(z1, relu_s)
-        push(h1s, h1)
-
-        var y = W2 @ h1 + b2 + aout
-        push(ys, y)
-
+        var z1   = W1 @ aout + b1
+        var h1   = map(z1, relu_s)
+        var y    = W2 @ h1 + b2 + aout
         var logit = Wout @ y + bout
-        push(logits, logit)
-
-        push(probs, softmax(logit))
+        :: {weights, ctx, aout, z1, h1, y, logit, softmax(logit)}
     }()
+
+    # Unpack into named lists for the backward pass
+    var attn     = map(fwd, (t){ :: t(0) })
+    var ctxs     = map(fwd, (t){ :: t(1) })
+    var attn_out = map(fwd, (t){ :: t(2) })
+    var z1s      = map(fwd, (t){ :: t(3) })
+    var h1s      = map(fwd, (t){ :: t(4) })
+    var ys       = map(fwd, (t){ :: t(5) })
+    var logits   = map(fwd, (t){ :: t(6) })
+    var probs    = map(fwd, (t){ :: t(7) })
 
     :: {x, q, k, v, attn, ctxs, attn_out, z1s, h1s, ys, logits, probs}
 }
@@ -204,32 +193,31 @@ var generate = (seed_idx, total_len){
 
 var train_step = (ids, targets, lr){
     var cache = model_forward(ids)
-    var x = cache(0)
-    var q = cache(1)
-    var k = cache(2)
-    var v = cache(3)
-    var attn = cache(4)
-    var ctxs = cache(5)
+    var x        = cache(0)
+    var q        = cache(1)
+    var k        = cache(2)
+    var v        = cache(3)
+    var attn     = cache(4)
+    var ctxs     = cache(5)
     var attn_out = cache(6)
-    var z1s = cache(7)
-    var h1s = cache(8)
-    var ys = cache(9)
-    var probs = cache(11)
+    var z1s      = cache(7)
+    var h1s      = cache(8)
+    var ys       = cache(9)
+    var probs    = cache(11)
 
-    var n = len(ids)
-    var scale = sqrt(d_model)
+    var n    = len(ids)
     var loss = 0.0
 
     var gWout = zeros({vocab_size, d_model})
     var gbout = zeros({vocab_size})
-    var gW2 = zeros({d_model, d_ff})
-    var gb2 = zeros({d_model})
-    var gW1 = zeros({d_ff, d_model})
-    var gb1 = zeros({d_ff})
-    var gWo = zeros({d_model, d_model})
-    var gWq = zeros({d_model, d_model})
-    var gWk = zeros({d_model, d_model})
-    var gWv = zeros({d_model, d_model})
+    var gW2   = zeros({d_model, d_ff})
+    var gb2   = zeros({d_model})
+    var gW1   = zeros({d_ff, d_model})
+    var gb1   = zeros({d_ff})
+    var gWo   = zeros({d_model, d_model})
+    var gWq   = zeros({d_model, d_model})
+    var gWk   = zeros({d_model, d_model})
+    var gWv   = zeros({d_model, d_model})
 
     var dx = zeros_rows(n, d_model)
     var dq = zeros_rows(n, d_model)
@@ -237,7 +225,7 @@ var train_step = (ids, targets, lr){
     var dv = zeros_rows(n, d_model)
 
     (i=0:n){
-        var target = one_hot(targets(i), vocab_size)
+        var target  = one_hot(targets(i), vocab_size)
         loss += -log(probs(i)(targets(i)) + 0.000000001)
 
         # softmax + cross-entropy gradient
@@ -247,11 +235,11 @@ var train_step = (ids, targets, lr){
 
         var dy = T(Wout) @ dlogits
 
-        # Feed-forward residual block
+        # Feed-forward residual block — grad(relu_s) replaces manual relu_grad_s
         gW2 += outer(dy, h1s(i))
         gb2 += dy
-        var dh1 = T(W2) @ dy
-        var dz1 = dh1 * map(z1s(i), relu_grad_s)
+        var dh1   = T(W2) @ dy
+        var dz1   = dh1 * d_relu(z1s(i))("x")
         gW1 += outer(dz1, attn_out(i))
         gb1 += dz1
         var dattn = dy + T(W1) @ dz1
@@ -262,7 +250,7 @@ var train_step = (ids, targets, lr){
         var dctx = T(Wo) @ dattn
 
         # Context / attention backward
-        var da = zeros_scalars(i + 1)
+        var da = zeros({i + 1})
         (j=0:i+1){
             dv(j) += dctx * attn(i)(j)
             da(j) = dctx @ v(j)
@@ -272,8 +260,8 @@ var train_step = (ids, targets, lr){
         (j=0:i+1){ weighted += da(j) * attn(i)(j) }()
         (j=0:i+1){
             var ds = attn(i)(j) * (da(j) - weighted)
-            dq(i) += k(j) * (ds / scale)
-            dk(j) += q(i) * (ds / scale)
+            dq(i) += k(j) * (ds * inv_scale)
+            dk(j) += q(i) * (ds * inv_scale)
         }()
     }()
 
@@ -291,14 +279,14 @@ var train_step = (ids, targets, lr){
     # SGD update
     Wout -= lr * gWout
     bout -= lr * gbout
-    W2 -= lr * gW2
-    b2 -= lr * gb2
-    W1 -= lr * gW1
-    b1 -= lr * gb1
-    Wo -= lr * gWo
-    Wq -= lr * gWq
-    Wk -= lr * gWk
-    Wv -= lr * gWv
+    W2   -= lr * gW2
+    b2   -= lr * gb2
+    W1   -= lr * gW1
+    b1   -= lr * gb1
+    Wo   -= lr * gWo
+    Wq   -= lr * gWq
+    Wk   -= lr * gWk
+    Wv   -= lr * gWv
 
     (i=0:n){
         update_row_in_place(token_embed, ids(i), dx(i), lr)
@@ -311,8 +299,8 @@ var train_step = (ids, targets, lr){
 
 # ── Data ──────────────────────────────────────────────────────────────────
 
-var input_ids = range(25)             # a..y
-var target_ids = range(1, 26)         # b..z
+var input_ids  = range(25)       # a..y
+var target_ids = range(1, 26)    # b..z
 
 
 # ── Demo output ───────────────────────────────────────────────────────────
@@ -328,9 +316,9 @@ print("Generated from seed 'a' before training:")
 print("  " + ids_to_string(before_ids))
 print("")
 
-var lr = 0.03
+var lr     = 0.03
 var epochs = 700
-var start = time()
+var start  = time()
 
 (epoch=0:epochs){
     var loss = train_step(input_ids, target_ids, lr)
@@ -348,8 +336,8 @@ print("")
 
 print("Attention matrix for prefix 'abcde' after training:")
 var demo_prefix = {0, 1, 2, 3, 4}
-var demo_cache = model_forward(demo_prefix)
-var demo_attn = demo_cache(4)
+var demo_cache  = model_forward(demo_prefix)
+var demo_attn   = demo_cache(4)
 (i=0:len(demo_attn)){
     print("  attn[" + str(i) + "] = " + str(demo_attn(i)))
 }()
