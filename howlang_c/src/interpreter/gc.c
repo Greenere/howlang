@@ -478,6 +478,7 @@ static void gc_mark_func(HowFunc *f) {
     f->gc_mark = 1;
     gc_mark_env(f->closure);
     if (f->grad_fn) gc_mark_func(f->grad_fn);
+    if (f->grad_cache) gc_mark_value(f->grad_cache);
 }
 static void gc_mark_class(HowClass *c) {
     if (!c || c->gc_mark) return;

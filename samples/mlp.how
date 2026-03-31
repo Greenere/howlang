@@ -4,9 +4,10 @@
 # Activations:   ReLU on hidden layers; sigmoid approximation on output
 # Task:          XOR  —  {0,0}→0  {0,1}→1  {1,0}→1  {1,1}→0
 #
-# grad() differentiates scalar activation functions automatically.
+# grad() is opt-in via set_grad(...).
 # Layer takes a single act_s and stores d_act = grad(act_s) at construction —
-# no manually written derivative functions needed.
+# no manually written derivative functions needed once the activation has
+# registered a gradient rule.
 #
 # grad(act_s)(tensor) now applies the scalar derivative element-wise and
 # returns a keyed map {"x": grad_tensor}, so the backward pass is a single
@@ -19,8 +20,8 @@
 # number, which breaks forward-mode autodiff at the kink. `set_grad(...)`
 # spells out the correct subgradient explicitly.
 #
-# sigmoid_s is smooth and composed entirely of arithmetic + abs, so grad()
-# differentiates it automatically — no grad block needed.
+# sigmoid_s is smooth and composed entirely of arithmetic + abs, so we opt it
+# into tape-backed grad() with an empty override map.
 
 var relu_s = (x){
     x > 0 :: x,
@@ -32,6 +33,7 @@ set_grad(relu_s, (x, g){
 })
 
 var sigmoid_s = (x){ :: 0.5 + 0.5 * x / (1 + abs(x)) }
+set_grad(sigmoid_s, (x, g){ :: {} })
 
 
 # ── Layer ─────────────────────────────────────────────────────────────────────

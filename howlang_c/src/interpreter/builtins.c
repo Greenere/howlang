@@ -822,20 +822,19 @@ BUILTIN(set_grad_fn) {
     if (target->is_grad) die("set_grad() cannot override grad(...) wrapper functions directly");
 
     if (target->grad_fn) func_decref(target->grad_fn);
+    if (target->grad_cache) {
+        val_decref(target->grad_cache);
+        target->grad_cache = NULL;
+    }
     target->grad_fn = rule;
     target->grad_fn->refcount++;
     return val_incref(ARG(0));
 }
 
-BUILTIN(grad_builtin_fn) {
-    NEED(1);
-    Value *f = ARG(0);
-    if (f->type != VT_FUNC && f->type != VT_BUILTIN)
-        die("grad() requires a function");
-
+static Value *make_grad_wrapper(Value *primal) {
     Env *grad_env = env_new(NULL);
     GC_ROOT_ENV(grad_env);
-    env_set(grad_env, "__primal__", f);
+    env_set(grad_env, "__primal__", primal);
 
     HowFunc *gfn = xmalloc(sizeof(*gfn));
     memset(gfn, 0, sizeof(*gfn));
@@ -851,6 +850,21 @@ BUILTIN(grad_builtin_fn) {
 
     GC_UNROOT_ENV();
     env_decref(grad_env);
+    return v;
+}
+
+BUILTIN(grad_builtin_fn) {
+    NEED(1);
+    Value *f = ARG(0);
+    if (f->type != VT_FUNC && f->type != VT_BUILTIN)
+        die("grad() requires a function");
+    if (f->type != VT_FUNC) return val_none();
+    if (f->func->is_grad) return val_none();
+    if (!f->func->grad_fn) return val_none();
+    if (f->func->grad_cache) return val_incref(f->func->grad_cache);
+
+    Value *v = make_grad_wrapper(f);
+    f->func->grad_cache = val_incref(v);
     return v;
 }
 

@@ -59,6 +59,7 @@ struct HowFunc {
     int      is_parallel;   /* 1 = parallel (^{}) variant */
     int      is_grad;       /* 1 = grad wrapper; closure has "__primal__" */
     HowFunc *grad_fn;       /* custom backward pass function, if defined */
+    Value   *grad_cache;    /* cached grad(...) wrapper for opt-in functions */
     char    *iter_var;
     Node    *fr_start;
     Node    *fr_stop;

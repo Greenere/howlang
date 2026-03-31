@@ -421,8 +421,8 @@ String concatenation uses `+` (auto-coerces either side to string).
 | `args()`                | List of command-line arguments                           |
 | `par(lst, fn)`          | Apply `fn` to each element of `lst` in parallel; returns result list |
 | `gc()`                  | Trigger a garbage collection cycle                       |
-| `set_grad(f, rule)`     | Attach a custom gradient rule used by `grad(f)`          |
-| `grad(f)`               | Return the gradient function of `f` (see Automatic Differentiation)     |
+| `set_grad(f, rule)`     | Opt `f` into gradients and attach a backward rule / override hook        |
+| `grad(f)`               | Return `none` until `f` has been registered with `set_grad(...)`         |
 | `time()`                | Current wall-clock time as milliseconds since Unix epoch                |
 | `time(fn)`              | Call `fn()` and return elapsed wall-clock milliseconds                  |
 | `cwd()`                 | Return the current working directory as a string         |
@@ -458,9 +458,12 @@ Howlang  |  Ctrl-D or quit() to exit
 
 ## Automatic Differentiation
 
-`grad(f)` returns a new function that computes the gradient of `f`. It always
-returns a **keyed map** — the same key for every call shape — so gradient
-values are always accessed by parameter name.
+`grad(f)` is opt-in. By default it returns `none`. After you register a
+function with `set_grad(f, rule)`, `grad(f)` returns a new function that
+computes gradients for `f`.
+
+The gradient function always returns a **keyed map** — the same key for every
+call shape — so gradient values are always accessed by parameter name.
 
 | `f` signature | `grad(f)(...)` returns | example |
 |---|---|---|
@@ -471,13 +474,14 @@ values are always accessed by parameter name.
 | `anything → non-number` | `none` | not differentiable |
 
 ```
-# Scalar derivative — forward-mode dual numbers
+# Scalar derivative — opt in with an empty override to use the built-in tape
 var f = (x){ :: x * x + 3 * x }
+set_grad(f, (x, g){ :: {} })
 grad(f)(3.0)("x")          # 9.0  (= 2*3 + 3)
-grad(grad(f))(3.0)("x")    # 2.0  (second derivative)
 
 # Multivariate — map of partial derivatives keyed by param name
 var g = (x, y){ :: x * x + x * y }
+set_grad(g, (x, y, g){ :: {} })
 var dg = grad(g)(2.0, 3.0)
 dg("x")   # 7.0  (= 2*2 + 3)
 dg("y")   # 2.0  (= 2)
@@ -486,6 +490,7 @@ dg("y")   # 2.0  (= 2)
 var a = 3.0
 var b = 2.0
 var loss = (){ :: a * a + b }
+set_grad(loss, (g){ :: {} })
 var gs = grad(loss)()
 gs("a")   # 6.0  (= 2*a)
 gs("b")   # 1.0
@@ -503,10 +508,11 @@ var x_opt = 0.0
 
 ### Custom Grad Rules
 
-Use `set_grad(f, rule)` to attach a custom backward rule to a function.
+Use `set_grad(f, rule)` to opt a function into `grad(...)`.
 `g` is the upstream gradient. The rule can return either a bare value (used
-for the first parameter) or a `{param: value}` map for partial overrides
-(tape fills in the rest).
+for the first parameter) or a `{param: value}` map for partial overrides.
+Returning `{}` is the shorthand for "no overrides; let the tape compute
+everything."
 
 ```
 # Bare return — gradient for the single param
@@ -525,8 +531,9 @@ dg("x")   # 4.0  (override: 2*2*1)
 dg("y")   # 27.0 (tape: 3*y^2 = 27)
 ```
 
-Without a custom grad rule the runtime uses tape-based reverse-mode AD for
-zero-arg closures, and forward-mode dual numbers for all other cases.
+Without `set_grad(...)`, `grad(f)` is simply `none`. With `set_grad(...)`,
+the runtime uses your overrides where provided and falls back to tape-based
+AD for omitted numeric parameters.
 
 ---
 
