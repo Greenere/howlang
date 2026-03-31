@@ -1,7 +1,7 @@
 # Howlang
 
 A small, expressive programming language by Haoyang Li (2022).  
-This repository contains a C interpreter (`c_interpreter/`) and an optional
+This repository contains a C interpreter (`howlang_c/`) and an optional
 self-hosting meta-interpreter written in Howlang itself (`samples/how_interpreter/`).
 
 ---
@@ -10,7 +10,7 @@ self-hosting meta-interpreter written in Howlang itself (`samples/how_interprete
 
 ```bash
 # Build (requires CMake 3.16+ and a C compiler)
-cd c_interpreter
+cd howlang_c
 cmake -S . -B build
 cmake --build build
 
@@ -647,28 +647,36 @@ Hint: this usually means a missing ')' earlier, or a trailing comma.
 
 ```
 howlang/
-  c_interpreter/              # C interpreter (CMake project)
+  howlang_c/                 # C interpreter (CMake project)
     CMakeLists.txt
     include/
-      common.h                # Shared utilities: buffers, memory, error reporting, REPL state
-      ast.h                   # AST node types and structures
-      sema.h                  # Semantic analysis / name-resolution pass API
-      runtime.h               # Public runtime API
-      lexer_internal.h        # Token types shared between lexer and parser (internal)
-      runtime_internal.h      # Types, globals, and declarations shared across runtime, gc, builtins (internal)
+      shared/
+        common.h              # Shared utilities: buffers, memory, error reporting, REPL state
+        ast.h                 # AST node types and structures
+      frontend/
+        lexer_internal.h      # Token types shared between lexer and parser (internal)
+      compiler/
+        sema.h                # Semantic analysis / name-resolution pass API
+        compiler.h            # AST -> bytecode compiler entry points
+        bytecode.h            # Bytecode and proto definitions
+        vm.h                  # Stack VM API
+      interpreter/
+        runtime.h             # Public runtime API
+        runtime_internal.h    # Private interpreter internals shared across translation units
     src/
+      shared/
+        common.c              # Implementations of shared utilities
       compiler/
         CMakeLists.txt         # Compiler-backend target definition
         sema.c                # Semantic analysis pass: scope tracking, identifier resolution, call validation
-      core/
+      cli/
         driver.c              # CLI entry point and REPL
+      frontend/
+        lexer.c               # Tokeniser
+        parser.c              # Parser, AST construction, and AST list helpers (nl_push, sl_push, make_node, ...)
+      interpreter/
         gc.c                  # GC state, value/env/map/list constructors, mark-sweep collector
         runtime.c             # Core evaluator (eval/exec_stmt/exec_body/run_branches) and public API
-      frontend/
-        common.c              # Implementations of common utilities
-        lexer.c               # Tokeniser
-        parser.c              # Parser, AST construction, and AST list helpers (nl_push, sl_push, make_node, …)
-      runtime/
         ad.c                  # Automatic differentiation: reverse-mode tape, dual numbers, grad
         builtins.c            # Built-in functions and global environment setup
         call.c                # Function/class invocation: eval_call_val, instantiate_class, run_loop
@@ -690,11 +698,11 @@ howlang/
 ## Running the Tests
 
 ```bash
-cd c_interpreter
+cd howlang_c
 cmake -S . -B build && cmake --build build
 ./build/howlang --check ../samples/tests/test_all.how
 cd ..
-HOW=./c_interpreter/build/howlang
+HOW=./howlang_c/build/howlang
 
 $HOW samples/tests/test_all.how          # 54/54 passed
 $HOW samples/tests/test_loops.how        # 41/41 passed
@@ -702,9 +710,9 @@ $HOW samples/tests/test_parallel.how     # 132/132 passed
 $HOW samples/tests/test_grad.how         # 114/114 passed
 
 cd samples
-../c_interpreter/build/howlang tests/lru_cache_test.how   # 34/34 passed
-../c_interpreter/build/howlang tests/graph_test.how        # 32/32 passed
-../c_interpreter/build/howlang tests/brainfuck_test.how    # 32/32 passed
+../howlang_c/build/howlang tests/lru_cache_test.how   # 34/34 passed
+../howlang_c/build/howlang tests/graph_test.how        # 32/32 passed
+../howlang_c/build/howlang tests/brainfuck_test.how    # 32/32 passed
 cd ..
 
 # Same core suite via the self-hosting meta-interpreter

@@ -95,8 +95,8 @@ testable artifact before the next begins.
 ### New files
 
 ```
-c_interpreter/include/sema.h
-c_interpreter/src/compiler/sema.c
+howlang_c/include/compiler/sema.h
+howlang_c/src/compiler/sema.c
 ```
 
 Add `sema` to `howlang_runtime` in CMakeLists.txt.
@@ -197,7 +197,7 @@ compiler needs to report multiple errors per file.
 ### New file
 
 ```
-c_interpreter/include/bytecode.h
+howlang_c/include/compiler/bytecode.h
 ```
 
 ### Instruction set
@@ -309,9 +309,9 @@ optimization pass on top.
 ### New files
 
 ```
-c_interpreter/src/core/compiler.c
-c_interpreter/src/core/vm.c
-c_interpreter/include/vm.h
+howlang_c/src/compiler/compiler.c
+howlang_c/src/compiler/vm.c
+howlang_c/include/compiler/vm.h
 ```
 
 Add these to a separate `howlang_compiler` target in CMakeLists.txt.

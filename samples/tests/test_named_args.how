@@ -52,7 +52,7 @@ write(print_fixture_path,
     + "print(\"B\", end=\"\")\n"
     + "print(\"C\")\n"
 )
-var print_cmd = "cd " + tests_dir + " && ../../c_interpreter/build/howlang test_named_args_print_fixture_tmp.how > test_named_args_print.out"
+var print_cmd = "cd " + tests_dir + " && ../../howlang_c/build/howlang test_named_args_print_fixture_tmp.how > test_named_args_print.out"
 assert_eq("fixture command exits cleanly", run(print_cmd), 0)
 assert_eq("print newline/end control", read(tests_dir + "test_named_args_print.out"), "ABC\n")
 
